@@ -2,7 +2,7 @@
 
 Laboratório didático de classificação de risco de crédito com **Node.js**, **TensorFlow.js** e uma rede neural **MLP (Multilayer Perceptron)**.
 
-Todo o ciclo de um projeto de Machine Learning supervisionado cabe em um único arquivo (`index.js`), do dado sintético até a inferência:
+Todo o ciclo de um projeto de Machine Learning supervisionado cabe em um único arquivo de código (`index.js`), do dado sintético até a inferência:
 
 ```mermaid
 flowchart LR
@@ -36,12 +36,15 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 
 - [Objetivo](#-objetivo)
 - [Início rápido](#-início-rápido)
+- [Testes](#testes)
+- [Solução de problemas](#-solução-de-problemas)
 - [Features de entrada](#-features-de-entrada)
 - [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos)
 - [Arquitetura da rede](#-arquitetura-da-rede)
 - [Treinamento](#-treinamento)
 - [Divisão dos dados](#-divisão-dos-dados)
 - [Inferência](#-inferência)
+- [API do módulo](#-api-do-módulo)
 - [Exemplo de saída](#-exemplo-de-saída)
 - [Gerenciamento de memória](#-gerenciamento-de-memória)
 - [Limitações conhecidas](#-limitações-conhecidas)
@@ -63,7 +66,10 @@ A rede recebe quatro características financeiras e devolve **um único número 
 O corte é feito em `0.5`:
 
 ```javascript
-probability >= 0.5 ? 'ALTO RISCO' : 'BAIXO RISCO';
+const DECISION_THRESHOLD = 0.5;
+
+const classify = (probability) =>
+  (probability >= DECISION_THRESHOLD ? 'ALTO RISCO' : 'BAIXO RISCO');
 ```
 
 Esse limiar é uma **escolha de negócio**, não uma verdade do modelo — baixá-lo captura mais inadimplentes ao custo de mais falsos positivos.
@@ -83,7 +89,7 @@ O `@tensorflow/tfjs-node` baixa binários nativos na instalação — o primeiro
 > ⛔ **Não use Node 23 ou superior.** Veja [Solução de problemas](#-solução-de-problemas).
 
 ```bash
-git clone https://github.com/felpsdev03/tfjs-credit-risk-classifier.git
+git clone https://github.com/Felps03/tfjs-credit-risk-classifier.git
 cd tfjs-credit-risk-classifier
 npm install
 npm start
@@ -177,17 +183,30 @@ O cliente é descrito por quatro campos brutos:
 Dois deles precisam ser **normalizados** antes de entrar na rede, para que todas as features fiquem na mesma escala (`0` a `1`) e nenhuma domine o gradiente só por ter números maiores:
 
 ```javascript
-const incomeNormalized       = (income - 2000) / 13000;  // min-max
-const latePaymentsNormalized = latePayments / 5;         // divisão pelo máximo
+const normalizeIncome = (income) => (income - INCOME_MIN) / INCOME_RANGE;
+
+const normalizeLatePayments = (latePayments) => latePayments / MAX_LATE_PAYMENTS;
 ```
 
 `debtRatio` e `creditUtilization` já nascem entre `0` e `1` e vão direto.
 
-Ou seja, o vetor que a rede realmente enxerga é:
+O vetor que a rede realmente enxerga é montado por uma única função:
 
 ```javascript
-[incomeNormalized, debtRatio, latePaymentsNormalized, creditUtilization]
+const toFeatureVector = ({
+  income,
+  debtRatio,
+  latePayments,
+  creditUtilization,
+}) => [
+  normalizeIncome(income),
+  debtRatio,
+  normalizeLatePayments(latePayments),
+  creditUtilization,
+];
 ```
+
+> 🔑 `toFeatureVector` é a **fonte única de verdade** da normalização: quem a chama é tanto a geração do dataset quanto a inferência do cliente novo. Duplicar essa lógica em dois lugares é a origem clássica do *training-serving skew* — o modelo passa a receber, em produção, números em escala diferente da que viu no treino.
 
 > 💡 Aqui as constantes de normalização (`2000`, `13000`, `5`) são conhecidas de antemão porque nós geramos os dados. **Em um projeto real elas devem ser calculadas apenas no conjunto de treino** e depois reaplicadas em validação/teste — caso contrário há vazamento de dados (*data leakage*).
 
@@ -204,7 +223,7 @@ const riskScore =
   1.0 * creditUtilization -
   0.8 * incomeNormalized;
 
-const highRisk = riskScore > 1.35 ? 1 : 0;  // 0 = baixo risco, 1 = alto risco
+const highRisk = riskScore > RISK_RULE_THRESHOLD ? 1 : 0;  // 1.35 · 0 = baixo, 1 = alto
 ```
 
 **A rede neural nunca vê essa fórmula.** Ela recebe só as quatro features e os rótulos `0`/`1`, e precisa descobrir sozinha o padrão a partir dos exemplos. É exatamente por isso que a acurácia alta no teste é um resultado interessante: significa que a MLP reconstruiu, nos seus pesos, uma aproximação da regra escondida.
@@ -240,11 +259,21 @@ flowchart LR
 Total: **225 parâmetros treináveis** — é o que o `model.summary()` imprime ao rodar.
 
 ```javascript
-const model = tf.sequential();
+const buildModel = () => {
+  const model = tf.sequential();
 
-model.add(tf.layers.dense({ inputShape: [4], units: 16, activation: 'relu' }));
-model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
-model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  model.add(tf.layers.dense({ inputShape: [4], units: 16, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+
+  model.compile({
+    optimizer: tf.train.adam(0.001),
+    loss: 'binaryCrossentropy',
+    metrics: ['accuracy'],
+  });
+
+  return model;
+};
 ```
 
 | Escolha       | Por quê                                                                                   |
@@ -253,7 +282,7 @@ model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
 | **16 → 8**    | Funil: capacidade suficiente para o padrão, pequena o bastante para não decorar o dataset  |
 
-O `index.js` chama `model.summary()` logo após a compilação, então você vê a contagem de parâmetros por camada ao rodar.
+O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução.
 
 ---
 
@@ -317,7 +346,22 @@ flowchart TD
     class C,F test
 ```
 
-O conjunto de **teste nunca participa do treinamento nem do early stopping**. Ele é a única medida honesta de como o modelo se comporta com dados que jamais viu.
+```javascript
+const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
+  const trainSize = Math.floor(features.length * trainRatio);
+
+  return {
+    trainFeatures: features.slice(0, trainSize),
+    trainLabels: labels.slice(0, trainSize),
+    testFeatures: features.slice(trainSize),
+    testLabels: labels.slice(trainSize),
+  };
+};
+```
+
+A segunda divisão — treino efetivo vs. validação — não aparece aqui: quem faz é o próprio `model.fit()`, via `validationSplit: 0.2`.
+
+O conjunto de **teste nunca participa do treinamento nem do early stopping**. Ele é a única medida honesta de como o modelo se comporta com dados que jamais viu, e a suíte de testes verifica que não há sobreposição entre as duas fatias.
 
 ---
 
@@ -333,18 +377,44 @@ const newCustomer = {
   creditUtilization: 0.88,
 };
 
-const input = tf.tensor2d([[
-  (newCustomer.income - 2000) / 13000,
-  newCustomer.debtRatio,
-  newCustomer.latePayments / 5,
-  newCustomer.creditUtilization,
-]]);
+const input = tf.tensor2d([toFeatureVector(newCustomer)]);
 
 const prediction  = model.predict(input);
 const probability = prediction.dataSync()[0];
+
+console.log('Classificação:', classify(probability));
 ```
 
+Repare que é **a mesma `toFeatureVector`** usada na geração do dataset — não há uma segunda cópia da fórmula de normalização no caminho da inferência.
+
 Renda baixa, endividamento alto, atrasos e crédito quase estourado — o modelo deve devolver uma probabilidade próxima de `1`.
+
+---
+
+## 🧩 API do módulo
+
+O `index.js` só executa o treino quando chamado direto (`node index.js`); ao ser importado, apenas expõe suas funções:
+
+```javascript
+if (require.main === module) {
+  main();
+}
+```
+
+É isso que permite testar as partes sem treinar a rede. O que ele exporta:
+
+| Export | Tipo | Papel |
+| ------ | ---- | ----- |
+| `INCOME_MIN`, `INCOME_RANGE`, `MAX_LATE_PAYMENTS` | constantes | Faixas usadas na normalização |
+| `RISK_RULE_THRESHOLD` | constante | Corte `1.35` da regra que gera os rótulos |
+| `DECISION_THRESHOLD` | constante | Corte `0.5` do classificador |
+| `normalizeIncome`, `normalizeLatePayments` | função | Normalizações min-max individuais |
+| `toFeatureVector` | função | Cliente bruto → vetor de 4 features |
+| `classify` | função | Probabilidade → `'ALTO RISCO'` / `'BAIXO RISCO'` |
+| `createDataset` | função | Gera `{ features, labels }` sintéticos |
+| `splitDataset` | função | Divide em treino e teste |
+| `buildModel` | função | Monta e compila a MLP |
+| `main` | função async | Pipeline completo: treina, avalia e prevê |
 
 ---
 
@@ -376,7 +446,11 @@ tf.dispose([
   xTrain, yTrain, xTest, yTest,
   input, prediction, lossTensor, accuracyTensor,
 ]);
+
+model.dispose();
 ```
+
+O `model.dispose()` é separado: libera os pesos, que não estão na lista de tensores avulsos.
 
 Em um script curto isso é apenas boa prática; em uma API de longa duração, esquecer o `dispose` vaza memória a cada requisição. Para blocos intermediários, `tf.tidy()` faz a limpeza automaticamente.
 
@@ -413,9 +487,9 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 - [ ] comparar arquiteturas diferentes.
 
 **Produto**
+- [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);
 - [ ] salvar e recarregar o modelo (`model.save` / `tf.loadLayersModel`);
 - [ ] API REST com endpoint `POST /risk-score`;
-- [ ] testes automatizados;
 - [ ] frontend para simular clientes;
 - [ ] inferência no navegador com TensorFlow.js.
 
@@ -457,7 +531,7 @@ O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização
 
 ## 📚 Conceitos demonstrados
 
-`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Inferência` · `Gerenciamento de tensores`
+`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
 
 ---
 
