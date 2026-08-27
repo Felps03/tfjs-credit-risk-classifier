@@ -1,11 +1,13 @@
 {
   "name": "tfjs-credit-risk-classifier",
   "version": "1.0.0",
-  "description": "Laboratório didático de classificação de risco de crédito com TensorFlow.js e uma rede neural MLP em Node.js: geração de dados sintéticos, normalização, treinamento com early stopping, avaliação em hold-out e inferência.",
+  "description": "Laboratório didático de classificação de risco de crédito com TensorFlow.js e uma rede neural MLP em Node.js: dataset real (German Credit/UCI) e sintético, normalização ajustada no treino, early stopping, matriz de confusão, ROC/AUC e ajuste do limiar por custo.",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
+    "start:synthetic": "node index.js --source=synthetic",
+    "fetch:german": "node scripts/fetch-german.js",
     "seed": "node -e \"const { writeCustomersCsv, createCustomers, CSV_PATH } = require('./index'); writeCustomersCsv(createCustomers()); console.log('Dataset regerado em:', CSV_PATH);\"",
     "test": "node --test",
     "test:watch": "node --test --watch"
@@ -23,6 +25,8 @@
     "binary-classification",
     "credit-risk",
     "credit-scoring",
+    "german-credit",
+    "uci-dataset",
     "nodejs",
     "javascript",
     "educational"

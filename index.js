@@ -46,6 +46,58 @@ const CSV_PRECISION = {
 };
 
 // --------------------------------------------------
+// Dataset REAL: German Credit (UCI / Statlog)
+// --------------------------------------------------
+// 1000 solicitações de crédito reais, coletadas por Hans Hofmann na
+// Universidade de Hamburgo e publicadas em 1994. É o contraponto do
+// dataset sintético: aqui ninguém escolheu a regra que separa bom de mau
+// pagador — ela precisa ser descoberta, e boa parte dela simplesmente
+// não está nas colunas.
+const GERMAN_CSV_PATH = path.join(__dirname, 'data', 'german-credit.csv');
+const GERMAN_SOURCE_URL = 'https://archive.ics.uci.edu/static/public/144/data.csv';
+
+// Códigos qualitativos do arquivo original, na ordem documentada pela
+// UCI. A posição na lista vira o valor numérico (codificação ORDINAL).
+const GERMAN_CODES = {
+  checkingStatus: ['A11', 'A12', 'A13', 'A14'],
+  creditHistory: ['A30', 'A31', 'A32', 'A33', 'A34'],
+  savingsStatus: ['A61', 'A62', 'A63', 'A64', 'A65'],
+  employmentYears: ['A71', 'A72', 'A73', 'A74', 'A75'],
+};
+
+// 8 das 20 colunas originais. O recorte fica com o que tem ordem natural,
+// porque codificar como ordinal só faz sentido quando existe um "mais" e
+// um "menos" — as demais precisariam de one-hot para não inventar ordem.
+//
+// Fica DE FORA de propósito o atributo 9 (estado civil e SEXO). Usar sexo
+// para negar crédito é discriminação, ilegal em vários países, e é um dos
+// motivos pelos quais este dataset virou caso clássico da literatura de
+// fairness. A coluna existe no arquivo; não entra no modelo.
+const GERMAN_FEATURES = [
+  'checkingStatus',
+  'durationMonths',
+  'creditHistory',
+  'creditAmount',
+  'savingsStatus',
+  'employmentYears',
+  'installmentRate',
+  'age',
+];
+
+const GERMAN_COLUMNS = [...GERMAN_FEATURES, CSV_LABEL_COLUMN];
+
+// Todas as colunas convertidas são inteiras: marcos ordinais, contagens,
+// meses, anos e o valor do crédito em marcos alemães.
+const GERMAN_PRECISION = Object.fromEntries(
+  GERMAN_COLUMNS.map((column) => [column, 0]),
+);
+
+// Semente do embaralhamento. Fixa de propósito: sem ela cada execução
+// mediria um recorte diferente do dataset e nenhum número deste projeto
+// se reproduziria. Trocar a semente é trocar o experimento.
+const SHUFFLE_SEED = 42;
+
+// --------------------------------------------------
 // 1. Pré-processamento
 // --------------------------------------------------
 // Estas funções são a ÚNICA fonte de verdade da normalização.
@@ -112,18 +164,26 @@ const createDataset = (total = 1200) => toDataset(createCustomers(total));
 // O CSV guarda os dados BRUTOS, não as features normalizadas. Normalizar
 // antes de salvar congelaria as constantes dentro do arquivo — e qualquer
 // ajuste na normalização exigiria reexportar tudo.
-const formatCsvValue = (column, value) => value.toFixed(CSV_PRECISION[column]);
+const formatCsvValue = (column, value, precision) =>
+  value.toFixed(precision[column]);
 
-const toCsv = (customers) => [
-  CSV_COLUMNS.join(','),
-  ...customers.map((customer) => CSV_COLUMNS
-    .map((column) => formatCsvValue(column, customer[column]))
-    .join(',')),
-].join('\n');
+// `columns` e `precision` são parâmetros porque cada fonte tem o seu
+// schema: o sintético e o German Credit não compartilham uma única coluna
+// além do rótulo. Os padrões mantêm o dataset sintético como estava.
+const toCsv = (customers, options = {}) => {
+  const { columns = CSV_COLUMNS, precision = CSV_PRECISION } = options;
 
-const writeCustomersCsv = (customers, filePath = CSV_PATH) => {
+  return [
+    columns.join(','),
+    ...customers.map((customer) => columns
+      .map((column) => formatCsvValue(column, customer[column], precision))
+      .join(',')),
+  ].join('\n');
+};
+
+const writeCustomersCsv = (customers, filePath = CSV_PATH, options = {}) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${toCsv(customers)}\n`);
+  fs.writeFileSync(filePath, `${toCsv(customers, options)}\n`);
 
   return filePath;
 };
@@ -160,8 +220,238 @@ const ensureCsv = (filePath = CSV_PATH, total = 1200) => {
 };
 
 // --------------------------------------------------
-// 4. Separar treino e teste
+// 4. Ler o arquivo original do German Credit
 // --------------------------------------------------
+// O arquivo da UCI não serve direto: as colunas qualitativas são códigos
+// ('A11', 'A34') que o `tf.data.csv` leria como NaN. Converter é um passo
+// obrigatório — e ele fica aqui, isolado e testável, para que todo o
+// resto do laboratório continue enxergando um CSV puramente numérico.
+
+// Parser mínimo: o arquivo da UCI não tem aspas nem vírgula dentro de
+// campo, então dividir por vírgula basta. Um CSV arbitrário exigiria
+// bem mais do que isto.
+const parseDelimited = (text) => {
+  const [header, ...lines] = text.trim().split(/\r?\n/);
+  const columns = header.split(',');
+
+  return lines.map((line) => Object.fromEntries(
+    line.split(',').map((value, index) => [columns[index], value]),
+  ));
+};
+
+// Código → posição na lista documentada. Código desconhecido vira erro,
+// não zero silencioso: dado corrompido precisa aparecer na hora, não
+// virar uma feature plausível que ninguém desconfia.
+const toOrdinal = (codes, code) => {
+  const index = codes.indexOf(code);
+
+  if (index === -1) {
+    throw new Error(`Código desconhecido no German Credit: ${code}`);
+  }
+
+  return index;
+};
+
+// Uma linha do arquivo original vira um cliente no vocabulário do
+// laboratório. A coluna `class` vale 1 (bom) ou 2 (mau); nossa convenção
+// é risk = 1 para o ALTO RISCO, ou seja, para o mau pagador.
+const toGermanCustomer = (row) => ({
+  checkingStatus: toOrdinal(GERMAN_CODES.checkingStatus, row.Attribute1),
+  durationMonths: Number(row.Attribute2),
+  creditHistory: toOrdinal(GERMAN_CODES.creditHistory, row.Attribute3),
+  creditAmount: Number(row.Attribute5),
+  savingsStatus: toOrdinal(GERMAN_CODES.savingsStatus, row.Attribute6),
+  employmentYears: toOrdinal(GERMAN_CODES.employmentYears, row.Attribute7),
+  installmentRate: Number(row.Attribute8),
+  age: Number(row.Attribute13),
+  risk: Number(row.class) === 2 ? 1 : 0,
+});
+
+const parseGermanCsv = (text) => parseDelimited(text).map(toGermanCustomer);
+
+// --------------------------------------------------
+// 5. Normalização ajustada no treino
+// --------------------------------------------------
+// O dataset sintético podia usar constantes fixas: nós geramos os dados,
+// então conhecíamos as faixas de antemão. Com dado real não existe esse
+// luxo — as faixas precisam ser MEDIDAS. E medidas só no treino.
+//
+// Calcular min/max sobre o dataset inteiro parece inofensivo e não é: o
+// maior empréstimo do conjunto de teste passaria a influenciar a escala
+// aplicada no treino. Isso é vazamento (data leakage), e o efeito é
+// sempre o mesmo — o modelo parece melhor na avaliação do que será
+// diante de dados que nunca viu.
+const fitMinMaxScaler = (customers, featureNames) => {
+  const min = {};
+  const range = {};
+
+  featureNames.forEach((feature) => {
+    const values = customers.map((customer) => customer[feature]);
+    const lowest = Math.min(...values);
+    const highest = Math.max(...values);
+
+    min[feature] = lowest;
+    // Coluna constante daria divisão por zero; 1 mantém o valor em 0.
+    range[feature] = highest - lowest || 1;
+  });
+
+  return { featureNames, min, range };
+};
+
+// Um valor de teste fora da faixa vista no treino sai de [0, 1] de
+// propósito. Cortar em 0 e 1 esconderia justamente o caso extremo que o
+// modelo nunca viu — e é sobre ele que se quer saber.
+const applyMinMaxScaler = ({ featureNames, min, range }, customer) =>
+  featureNames.map((feature) => (customer[feature] - min[feature]) / range[feature]);
+
+// --------------------------------------------------
+// 6. Fontes de dados
+// --------------------------------------------------
+// Cada fonte descreve tudo que muda de um dataset para o outro: onde o
+// CSV vive, quais colunas viram features, como normalizar e que cliente
+// usar na demonstração de inferência.
+//
+// Todo o resto do laboratório — treino, matriz de confusão, precision,
+// ROC, escolha de limiar — não sabe qual fonte está em uso. Trocar de
+// dataset não exigiu tocar em nenhuma dessas partes, e é justamente esse
+// o teste de que o pipeline estava bem separado.
+const SYNTHETIC_SOURCE = {
+  id: 'synthetic',
+  label: 'Sintético (gerado por este projeto)',
+  csvPath: CSV_PATH,
+  columns: CSV_COLUMNS,
+  precision: CSV_PRECISION,
+  featureNames: ['income', 'debtRatio', 'latePayments', 'creditUtilization'],
+
+  ensure: () => ensureCsv(),
+  read: () => readCustomersCsv(CSV_PATH),
+
+  // A escala é CONHECIDA porque nós geramos os dados: "ajustar" aqui é
+  // devolver as constantes, e o argumento é ignorado de propósito.
+  // É o privilégio que o dataset real não tem.
+  fitScaler: () => null,
+  toVector: (customer) => toFeatureVector(customer),
+
+  sampleCustomer: {
+    income: 3500,
+    debtRatio: 0.72,
+    latePayments: 3,
+    creditUtilization: 0.88,
+  },
+};
+
+const GERMAN_SOURCE = {
+  id: 'german',
+  label: 'German Credit — UCI/Statlog (Hofmann, 1994)',
+  csvPath: GERMAN_CSV_PATH,
+  columns: GERMAN_COLUMNS,
+  precision: GERMAN_PRECISION,
+  featureNames: GERMAN_FEATURES,
+
+  // Dado real não se "gera": ou já está em disco, ou precisa ser baixado.
+  // É a diferença mais concreta entre as duas fontes.
+  ensure: (filePath = GERMAN_CSV_PATH) => {
+    if (!fs.existsSync(filePath)) {
+      throw new Error([
+        `Dataset real não encontrado em ${filePath}.`,
+        'Rode `npm run fetch:german` para baixá-lo da UCI.',
+      ].join('\n'));
+    }
+
+    return { path: filePath, created: false };
+  },
+  read: () => readCustomersCsv(GERMAN_CSV_PATH),
+
+  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_FEATURES),
+  toVector: (customer, scaler) => applyMinMaxScaler(scaler, customer),
+
+  // Perfil desfavorável em todas as frentes: conta corrente no vermelho,
+  // prazo longo, histórico curto, sem poupança e prestação no teto.
+  sampleCustomer: {
+    checkingStatus: 0,
+    durationMonths: 48,
+    creditHistory: 1,
+    creditAmount: 9000,
+    savingsStatus: 0,
+    employmentYears: 1,
+    installmentRate: 4,
+    age: 24,
+  },
+};
+
+const SOURCES = {
+  [SYNTHETIC_SOURCE.id]: SYNTHETIC_SOURCE,
+  [GERMAN_SOURCE.id]: GERMAN_SOURCE,
+};
+
+// O dataset real é o padrão: é ele que mostra o laboratório sob condições
+// honestas. O sintético continua a um argumento de distância, porque
+// comparar os dois é metade da lição.
+const DEFAULT_SOURCE_ID = GERMAN_SOURCE.id;
+
+const resolveSourceId = (argv = []) => {
+  const flag = argv.find((argument) => argument.startsWith('--source='));
+  const id = flag ? flag.slice('--source='.length) : DEFAULT_SOURCE_ID;
+
+  if (!SOURCES[id]) {
+    throw new Error(
+      `Fonte desconhecida: ${id}. Use uma de: ${Object.keys(SOURCES).join(', ')}.`,
+    );
+  }
+
+  return id;
+};
+
+// --------------------------------------------------
+// 7. Separar treino e teste
+// --------------------------------------------------
+// Gerador pseudoaleatório COM SEMENTE (mulberry32). `Math.random()` não
+// aceita semente: com ele cada execução embaralharia diferente, e aí
+// nenhum resultado deste projeto seria reproduzível.
+const createRandom = (seed) => {
+  let state = seed;
+
+  return () => {
+    state = (state + 0x6D2B79F5) | 0;
+
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+// Fisher-Yates sobre uma CÓPIA: a ordem original do arquivo é preservada.
+const shuffle = (items, random) => {
+  const copy = [...items];
+
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+  }
+
+  return copy;
+};
+
+// Separa os clientes ANTES de normalizar. A ordem importa: normalizar
+// primeiro faria as estatísticas do teste vazarem para dentro do treino.
+//
+// Com dado sintético embaralhar é indiferente — cada linha é sorteada de
+// forma independente. Com dado real não: um arquivo pode chegar ordenado
+// por data, por agência ou pela própria classe, e um corte cru no meio
+// separaria dois conjuntos que não representam a mesma população.
+const splitCustomers = (customers, trainRatio = 0.8) => {
+  const trainSize = Math.floor(customers.length * trainRatio);
+
+  return {
+    trainCustomers: customers.slice(0, trainSize),
+    testCustomers: customers.slice(trainSize),
+  };
+};
+
+// Variante que opera sobre features JÁ normalizadas. Continua servindo o
+// caminho sintético e os testes; o fluxo principal usa `splitCustomers`.
 const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
   const trainSize = Math.floor(features.length * trainRatio);
 
@@ -174,7 +464,7 @@ const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
 };
 
 // --------------------------------------------------
-// 5. Criar a MLP
+// 8. Criar a MLP
 // --------------------------------------------------
 // A compilação fica isolada porque é usada em dois momentos:
 // ao montar o modelo do zero e ao recompilar um modelo carregado
@@ -189,11 +479,14 @@ const compileModel = (model) => {
   return model;
 };
 
-const buildModel = () => {
+// O número de entradas vem da fonte de dados: o sintético tem 4 features,
+// o German Credit tem 8. Era a única parte da rede que precisava saber
+// qual dataset está em uso.
+const buildModel = (inputSize = 4) => {
   const model = tf.sequential();
 
   model.add(tf.layers.dense({
-    inputShape: [4],
+    inputShape: [inputSize],
     units: 16,
     activation: 'relu',
   }));
@@ -212,7 +505,7 @@ const buildModel = () => {
 };
 
 // --------------------------------------------------
-// 6. Persistência
+// 9. Persistência
 // --------------------------------------------------
 // O tfjs-node registra o esquema `file://`. Salvar em `./model`
 // gera dois arquivos:
@@ -239,12 +532,14 @@ const loadModel = async (dir = MODEL_DIR) => {
 };
 
 // --------------------------------------------------
-// 7. Inferência
+// 10. Inferência
 // --------------------------------------------------
 // Encapsula o ciclo tensor → predição → dispose para que nenhum
 // tensor intermediário escape em quem chama.
-const predictRisk = (model, customer) => {
-  const input = tf.tensor2d([toFeatureVector(customer)]);
+// `toVector` é injetável porque cada fonte normaliza de um jeito — e o
+// dataset real só sabe normalizar depois de ver o conjunto de treino.
+const predictRisk = (model, customer, toVector = toFeatureVector) => {
+  const input = tf.tensor2d([toVector(customer)]);
   const prediction = model.predict(input);
   const probability = prediction.dataSync()[0];
 
@@ -254,7 +549,7 @@ const predictRisk = (model, customer) => {
 };
 
 // --------------------------------------------------
-// 8. Matriz de confusão
+// 11. Matriz de confusão
 // --------------------------------------------------
 // A `accuracy` diz quanto o modelo acerta; a matriz diz COMO ele erra.
 // Em risco de crédito os dois erros custam coisas diferentes:
@@ -331,7 +626,7 @@ const formatConfusionMatrix = ({
 );
 
 // --------------------------------------------------
-// 9. Precision, recall e F1-score
+// 12. Precision, recall e F1-score
 // --------------------------------------------------
 // Derivados direto da matriz — nenhuma predição nova é feita.
 // As três respondem a perguntas diferentes sobre a MESMA classe positiva:
@@ -383,7 +678,7 @@ const formatMetrics = (metrics) => {
 };
 
 // --------------------------------------------------
-// 10. Curva ROC e AUC
+// 13. Curva ROC e AUC
 // --------------------------------------------------
 // Matriz, precision e recall descrevem UM limiar. A ROC descreve TODOS:
 // cada ponto é um corte possível, com sua taxa de acerto (TPR) e seu
@@ -520,7 +815,7 @@ const formatRocCurve = (points, options = {}) => {
 };
 
 // --------------------------------------------------
-// 11. Escolher o limiar a partir da curva
+// 14. Escolher o limiar a partir da curva
 // --------------------------------------------------
 // Até aqui o corte era herdado (`0.5`). Com a curva na mão dá para
 // escolhê-lo — e há duas maneiras, que respondem a perguntas diferentes.
@@ -580,6 +875,15 @@ const formatThresholdComparison = (candidates) => formatTable(
   ]),
 );
 
+// Acurácia de quem sempre chuta a classe majoritária, sem olhar para
+// nenhuma feature. É o PISO: um modelo que não supera este número não
+// aprendeu nada aproveitável, por mais alta que a acurácia pareça.
+const majorityBaseline = (labels) => {
+  const positives = labels.filter(([risk]) => risk === 1).length;
+
+  return Math.max(positives, labels.length - positives) / labels.length;
+};
+
 const evaluateModel = (model, xTest, yTest) => {
   const [lossTensor, accuracyTensor] = model.evaluate(xTest, yTest);
   const loss = lossTensor.dataSync()[0];
@@ -591,30 +895,42 @@ const evaluateModel = (model, xTest, yTest) => {
 };
 
 // --------------------------------------------------
-// 12. Treinar, avaliar, salvar, recarregar e prever
+// 15. Treinar, avaliar, salvar, recarregar e prever
 // --------------------------------------------------
-const main = async () => {
-  // O CSV é criado na primeira execução e reusado nas seguintes: os
-  // dados vêm do ARQUIVO, como um dataset real viria.
-  const { created } = ensureCsv();
+const main = async (sourceId = DEFAULT_SOURCE_ID) => {
+  const source = SOURCES[sourceId];
 
-  console.log(
-    created ? 'Dataset gerado em:' : 'Dataset lido de:',
-    CSV_PATH,
-  );
+  // O sintético se gera se faltar; o real só confere que está em disco.
+  source.ensure();
 
-  const dataset = await loadDatasetCsv();
-  console.log('Clientes lidos do CSV:', dataset.features.length);
+  console.log('Fonte:', source.label);
+  console.log('Arquivo:', source.csvPath);
 
-  const { trainFeatures, trainLabels, testFeatures, testLabels } =
-    splitDataset(dataset);
+  // Embaralhar ANTES de separar. O arquivo real chega na ordem em que foi
+  // coletado, e essa ordem não é aleatória — pode concentrar um perfil de
+  // cliente em um trecho e outro perfil no resto.
+  const customers = shuffle(await source.read(), createRandom(SHUFFLE_SEED));
 
-  const xTrain = tf.tensor2d(trainFeatures);
+  console.log('Clientes lidos:', customers.length);
+  console.log('Features:', source.featureNames.join(', '));
+
+  const { trainCustomers, testCustomers } = splitCustomers(customers);
+
+  // A escala é medida SÓ no treino e aplicada aos dois conjuntos.
+  // O teste é tratado como dado que ainda não existia quando o
+  // pré-processamento foi definido — porque é assim que será em produção.
+  const scaler = source.fitScaler(trainCustomers);
+  const toVector = (customer) => source.toVector(customer, scaler);
+
+  const trainLabels = trainCustomers.map(({ risk }) => [risk]);
+  const testLabels = testCustomers.map(({ risk }) => [risk]);
+
+  const xTrain = tf.tensor2d(trainCustomers.map(toVector));
   const yTrain = tf.tensor2d(trainLabels);
-  const xTest = tf.tensor2d(testFeatures);
+  const xTest = tf.tensor2d(testCustomers.map(toVector));
   const yTest = tf.tensor2d(testLabels);
 
-  const model = buildModel();
+  const model = buildModel(source.featureNames.length);
   model.summary();
 
   await model.fit(xTrain, yTrain, {
@@ -633,8 +949,14 @@ const main = async () => {
   const { loss: testLoss, accuracy: testAccuracy } =
     evaluateModel(model, xTest, yTest);
 
+  // A acurácia sozinha não diz se o modelo presta. Ao lado do piso da
+  // classe majoritária ela passa a dizer: a distância entre os dois
+  // números é tudo que o treino realmente acrescentou.
+  const baseline = majorityBaseline(testLabels);
+
   console.log('Test loss:', testLoss.toFixed(4));
   console.log('Test accuracy:', testAccuracy.toFixed(4));
+  console.log('Baseline (classe majoritária):', baseline.toFixed(4));
 
   const confusion = computeConfusionMatrix(model, xTest, yTest);
 
@@ -702,22 +1024,17 @@ const main = async () => {
   console.log('');
 
   // ------------------------------------------------
-  // 13. Novo cliente
+  // Novo cliente
   // ------------------------------------------------
-  const newCustomer = {
-    income: 3500,
-    debtRatio: 0.72,
-    latePayments: 3,
-    creditUtilization: 0.88,
-  };
-
-  const probability = predictRisk(model, newCustomer);
+  // O cliente de exemplo vem da fonte: as features de um dataset não
+  // fazem sentido nenhum no outro.
+  const probability = predictRisk(model, source.sampleCustomer, toVector);
 
   console.log('Probabilidade de alto risco:', probability.toFixed(4));
   console.log('Classificação:', classify(probability));
 
   // ------------------------------------------------
-  // 14. Salvar em disco e descartar o modelo da memória
+  // Salvar em disco e descartar o modelo da memória
   // ------------------------------------------------
   await saveModel(model);
   console.log('Modelo salvo em:', MODEL_DIR);
@@ -725,13 +1042,13 @@ const main = async () => {
   model.dispose();
 
   // ------------------------------------------------
-  // 15. Recarregar e conferir que nada se perdeu
+  // Recarregar e conferir que nada se perdeu
   // ------------------------------------------------
   const loadedModel = await loadModel();
 
   const { loss: loadedLoss, accuracy: loadedAccuracy } =
     evaluateModel(loadedModel, xTest, yTest);
-  const loadedProbability = predictRisk(loadedModel, newCustomer);
+  const loadedProbability = predictRisk(loadedModel, source.sampleCustomer, toVector);
 
   console.log('Modelo recarregado — test loss:', loadedLoss.toFixed(4));
   console.log('Modelo recarregado — test accuracy:', loadedAccuracy.toFixed(4));
@@ -745,7 +1062,7 @@ const main = async () => {
   );
 
   // ------------------------------------------------
-  // 16. Limpeza de memória
+  // Limpeza de memória
   // ------------------------------------------------
   tf.dispose([xTrain, yTrain, xTest, yTest]);
   loadedModel.dispose();
@@ -754,8 +1071,18 @@ const main = async () => {
 // Só executa quando chamado direto (node index.js).
 // Ao ser importado pelos testes, apenas expõe as funções.
 if (require.main === module) {
-  main();
+  // Envolver em uma função async faz o erro SÍNCRONO de `resolveSourceId`
+  // virar rejeição e cair no mesmo `.catch` dos erros assíncronos. Sem
+  // isso, um argumento inválido imprimiria stack trace no lugar da
+  // mensagem que diz quais fontes existem.
+  const run = async () => main(resolveSourceId(process.argv.slice(2)));
+
+  run().catch((error) => {
+    console.error(`\n${error.message}\n`);
+    process.exitCode = 1;
+  });
 }
+
 
 module.exports = {
   INCOME_MIN,
@@ -768,6 +1095,13 @@ module.exports = {
   CSV_COLUMNS,
   CSV_LABEL_COLUMN,
   CSV_PRECISION,
+  GERMAN_CSV_PATH,
+  GERMAN_SOURCE_URL,
+  GERMAN_CODES,
+  GERMAN_FEATURES,
+  GERMAN_COLUMNS,
+  GERMAN_PRECISION,
+  SHUFFLE_SEED,
   normalizeIncome,
   normalizeLatePayments,
   toFeatureVector,
@@ -778,6 +1112,21 @@ module.exports = {
   toCsv,
   writeCustomersCsv,
   ensureCsv,
+  parseDelimited,
+  toOrdinal,
+  toGermanCustomer,
+  parseGermanCsv,
+  fitMinMaxScaler,
+  applyMinMaxScaler,
+  SYNTHETIC_SOURCE,
+  GERMAN_SOURCE,
+  SOURCES,
+  DEFAULT_SOURCE_ID,
+  resolveSourceId,
+  createRandom,
+  shuffle,
+  splitCustomers,
+  majorityBaseline,
   readCustomersCsv,
   loadDatasetCsv,
   splitDataset,

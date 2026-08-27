@@ -2,14 +2,15 @@
 
 Laboratório didático de classificação de risco de crédito com **Node.js**, **TensorFlow.js** e uma rede neural **MLP (Multilayer Perceptron)**.
 
-Todo o ciclo de um projeto de Machine Learning supervisionado cabe em um único arquivo de código (`index.js`), do dado sintético até a inferência:
+Todo o ciclo de um projeto de Machine Learning supervisionado cabe em um único arquivo de código (`index.js`), do dado bruto até a inferência — sobre um **dataset real de crédito** ou sobre um dataset sintético gerado aqui:
 
 ```mermaid
 flowchart LR
-    A(["🎯 Problema"]) --> B["📥 Geração dos dados<br/>1200 clientes sintéticos"]
+    A(["🎯 Problema"]) --> B["🏦 Dados<br/>German Credit (UCI)<br/>ou sintéticos"]
     B --> B2["📄 CSV<br/>dados brutos em disco"]
-    B2 --> C["⚙️ Pré-processamento<br/>normalização 0–1"]
-    C --> D["🏋️ Treinamento<br/>MLP 4 → 16 → 8 → 1"]
+    B2 --> S["✂️ Split<br/>treino / teste"]
+    S --> C["⚙️ Pré-processamento<br/>escala medida no treino"]
+    C --> D["🏋️ Treinamento<br/>MLP 8 → 16 → 8 → 1"]
     D --> E{"📊 Validação<br/>val_loss melhorou?"}
     E -->|"sim — próxima época"| D
     E -->|"não há 5 épocas — early stopping"| F["🧪 Teste<br/>matriz, F1, AUC<br/>e ajuste do limiar"]
@@ -22,7 +23,7 @@ flowchart LR
     classDef final fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class A start
-    class B,B2,C,D step
+    class B,B2,S,C,D step
     class E check
     class F,G step
     class H final
@@ -30,7 +31,7 @@ flowchart LR
 
 O laço entre **Treinamento** e **Validação** é o coração do processo: a cada época o modelo é medido em dados que não usou para ajustar pesos, e o *early stopping* corta o ciclo quando essa medida para de melhorar. **Teste**, **Persistência** e **Predição** acontecem uma única vez, depois que o treino terminou.
 
-> ⚠️ Dados **sintéticos**, finalidade **exclusivamente educacional**. Não use para decisões financeiras reais.
+> ⚠️ Finalidade **exclusivamente educacional**. O dataset real é de 1994 e serve de estudo, não de base para decisões financeiras.
 
 ---
 
@@ -43,6 +44,7 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 - [Features de entrada](#-features-de-entrada)
 - [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos)
 - [Carregando dados de um CSV](#-carregando-dados-de-um-csv)
+- [Dataset real: German Credit](#-dataset-real-german-credit)
 - [Arquitetura da rede](#-arquitetura-da-rede)
 - [Treinamento](#-treinamento)
 - [Divisão dos dados](#-divisão-dos-dados)
@@ -64,7 +66,7 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 
 Treinar uma rede neural capaz de estimar a probabilidade de um cliente ser de **alto risco** de inadimplência.
 
-A rede recebe quatro características financeiras e devolve **um único número entre `0` e `1`**:
+A rede recebe as características financeiras do cliente — **8** no dataset real, **4** no sintético — e devolve **um único número entre `0` e `1`**:
 
 | Saída da rede | Interpretação          | Classificação |
 | ------------: | ---------------------- | ------------- |
@@ -103,13 +105,24 @@ npm install
 npm start
 ```
 
-O dataset (`data/customers.csv`) vem versionado, então ele **não** muda entre execuções. Os pesos iniciais continuam aleatórios, então as métricas variam um pouco a cada rodada — isso é esperado. Para trocar os dados de propósito: `npm run seed`.
+`npm start` roda sobre o **[German Credit](#-dataset-real-german-credit)**, um dataset real da UCI. Os dois CSVs vêm versionados, então isso funciona **offline** logo após o clone.
+
+```bash
+npm start                # dataset real (German Credit) — padrão
+npm run start:synthetic  # dataset sintético gerado pelo projeto
+npm run fetch:german     # rebaixa o dataset real da UCI e reconverte
+npm run seed             # regenera o dataset sintético com dados novos
+```
+
+Os dados **não** mudam entre execuções: o real é fixo e o sintético é embaralhado com semente fixa. Os pesos iniciais da rede continuam aleatórios, então as métricas oscilam um pouco a cada rodada — isso é esperado.
 
 ### Estrutura
 
 ```text
 tfjs-credit-risk-classifier/
-├── index.js               # dataset, modelo, treino, avaliação, persistência e predição
+├── index.js               # fontes de dados, modelo, treino, avaliação, persistência e predição
+├── scripts/
+│   └── fetch-german.js    # baixa o German Credit da UCI e converte
 ├── test/
 │   └── index.test.js      # testes com o runner nativo do Node
 ├── package.json
@@ -117,7 +130,8 @@ tfjs-credit-risk-classifier/
 ├── .nvmrc                 # versão do Node suportada
 ├── .gitignore
 ├── data/
-│   └── customers.csv      # dataset versionado, em unidades brutas
+│   ├── german-credit.csv  # dataset REAL (UCI/Statlog), convertido e versionado
+│   └── customers.csv      # dataset sintético versionado, em unidades brutas
 ├── model/                 # gerado por `npm start` — ignorado pelo git
 │   ├── model.json         # topologia + training config
 │   └── weights.bin        # pesos e estado do otimizador
@@ -129,7 +143,6 @@ tfjs-credit-risk-classifier/
 ```bash
 npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
-npm run seed       # regenera data/customers.csv com dados novos
 ```
 
 Os testes usam o **runner nativo do Node** (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento — e são escritos no formato **Given / When / Then**:
@@ -162,7 +175,18 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede:
 | `ensureCsv`            | Cria quando falta, **não altera** quando já existe, e sobrescreve só na chamada explícita |
 | `loadDatasetCsv`       | Formato igual ao de `createDataset`, features em `[0, 1]`, mesma `toFeatureVector` e treino rodando a partir do arquivo |
 | `splitDataset`         | Proporções, nada perdido e **ausência de sobreposição entre treino e teste**  |
-| `buildModel`           | 3 camadas, entrada `[null, 4]`, saída `[null, 1]`, **225 parâmetros**, ativações e loss |
+| `parseDelimited`       | Cabeçalho vira chave, CRLF do Windows e quebra de linha final sem gerar linha vazia |
+| `toOrdinal`            | Código conhecido vira posição; código desconhecido **lança** em vez de virar `0` |
+| `toGermanCustomer`     | Códigos → ordinais, numéricos → `Number`, `class 2` → `risk 1` e cobertura de todas as features |
+| `parseGermanCsv`       | Texto bruto da UCI → clientes prontos, ponta a ponta |
+| `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as colunas declaradas e nenhum valor não-finito |
+| `fitMinMaxScaler` / `applyMinMaxScaler` | Mínimo e amplitude, coluna constante sem divisão por zero, valor fora da faixa **não** cortado, ordem do vetor e **ausência de vazamento do teste para a escala** |
+| `createRandom` / `shuffle` | Mesma semente → mesma sequência, faixa `[0, 1)`, permutação, entrada não modificada e embaralhamento reproduzível |
+| `splitCustomers`       | Proporções e ausência de sobreposição, agora sobre clientes brutos |
+| `majorityBaseline`     | Piso da classe majoritária com maioria negativa, positiva e empate |
+| `SOURCES` / `resolveSourceId` | Padrão, seleção por flag, fonte inválida, **contrato cumprido por todas as fontes**, tamanho do vetor, escala medida e mensagem acionável quando o CSV real falta |
+| `toCsv` com schema     | Cabeçalho do German Credit e compatibilidade da chamada sem opções |
+| `buildModel`           | 3 camadas, entrada `[null, 4]` ou `[null, 8]`, saída `[null, 1]`, **225 parâmetros**, ativações e loss |
 | `computeConfusionMatrix` | TP/TN/FP/FN contra predições conhecidas, layout da matriz, efeito do limiar, coerência com a `accuracy` do `evaluate` e ausência de vazamento de tensores |
 | `formatConfusionMatrix` | Estrutura da tabela, as quatro contagens presentes e colunas alinhadas |
 | `computeMetrics` | Fórmulas contra cálculo manual, F1 conferido pelas duas formas, casos degenerados sem `NaN` e a média harmônica abaixo da aritmética |
@@ -238,6 +262,10 @@ const toFeatureVector = ({
 > 🔑 `toFeatureVector` é a **fonte única de verdade** da normalização: quem a chama é tanto a geração do dataset quanto a inferência do cliente novo. Duplicar essa lógica em dois lugares é a origem clássica do *training-serving skew* — o modelo passa a receber, em produção, números em escala diferente da que viu no treino.
 
 > 💡 Aqui as constantes de normalização (`2000`, `13000`, `5`) são conhecidas de antemão porque nós geramos os dados. **Em um projeto real elas devem ser calculadas apenas no conjunto de treino** e depois reaplicadas em validação/teste — caso contrário há vazamento de dados (*data leakage*).
+>
+> É exatamente o que o [dataset real](#-agora-a-normalização-precisa-ser-medida) obrigou a fazer: lá as faixas são **medidas**, e só sobre o treino.
+
+As features acima descrevem o dataset sintético. O dataset real tem [as suas próprias oito](#-as-8-features-escolhidas) — e o pipeline atende as duas sem saber qual está em uso.
 
 ---
 
@@ -359,6 +387,205 @@ Sem esse `existsSync`, versionar o CSV seria um incômodo: todo `npm start` rees
 | `npm run seed` | **Regenera** com dados novos — mudança deliberada, que você commita se quiser |
 
 Um dataset real — que você recebe em vez de gerar — entraria exatamente aqui, e o `createCustomers` sairia do caminho.
+
+---
+
+## 🏦 Dataset real: German Credit
+
+Todo o laboratório até aqui rodou sobre dados que **este projeto inventou**. Isso foi útil — dá para conferir se a rede aprendeu, porque a regra que gerou os rótulos está a três linhas de distância. Mas também é a razão de a acurácia viver perto de `0.98`: o padrão existia, era limpo, e não havia mais nada no caminho.
+
+O **German Credit** troca esse conforto por realidade: 1.000 solicitações de crédito de verdade, coletadas por Hans Hofmann na Universidade de Hamburgo e publicadas em 1994. Ninguém escolheu a regra que separa bom de mau pagador — e boa parte dela simplesmente **não está nas colunas**.
+
+```bash
+npm run fetch:german     # baixa da UCI e converte (o CSV já vem versionado)
+npm start                # roda no dataset real — passou a ser o padrão
+npm run start:synthetic  # o laboratório sintético continua a um argumento
+```
+
+| | Sintético | German Credit |
+| --- | ---: | ---: |
+| Clientes | 1.200 | 1.000 |
+| Features | 4 | 8 |
+| Alto risco | ~46% | 30% |
+| Origem dos rótulos | fórmula conhecida | comportamento real |
+| Ruído | nenhum | todo o que a realidade tem |
+
+### As 8 features escolhidas
+
+Das 20 colunas originais, o projeto usa 8 — as que têm **ordem natural**, porque codificar como ordinal só faz sentido quando existe um "mais" e um "menos":
+
+| Feature | Origem | Significado |
+| ------- | ------ | ----------- |
+| `checkingStatus` | Attr. 1 | Saldo da conta corrente, de negativo (`0`) a sem conta (`3`) |
+| `durationMonths` | Attr. 2 | Prazo do empréstimo, `4` a `72` meses |
+| `creditHistory` | Attr. 3 | Histórico, de "sem crédito anterior" (`0`) a "conta crítica" (`4`) |
+| `creditAmount` | Attr. 5 | Valor pedido, `250` a `18.424` marcos |
+| `savingsStatus` | Attr. 6 | Poupança, de `< 100 DM` (`0`) a desconhecida (`4`) |
+| `employmentYears` | Attr. 7 | Tempo de emprego, de desempregado (`0`) a `≥ 7 anos` (`4`) |
+| `installmentRate` | Attr. 8 | Prestação como % da renda disponível, `1` a `4` |
+| `age` | Attr. 13 | Idade, `19` a `75` |
+
+> ⚖️ O **atributo 9 (estado civil e sexo) ficou de fora de propósito.** Usar sexo para negar crédito é discriminação e é ilegal em vários países — e é justamente por conter essa coluna que o German Credit virou caso clássico da literatura de *fairness*. A coluna existe no arquivo; não entra no modelo.
+
+### A ordem que os dados nem sempre têm
+
+Codificar categoria como ordinal **impõe** uma ordem. Vale conferir se os dados concordam:
+
+| `checkingStatus` | Maus pagadores |
+| ---------------- | -------------: |
+| `0` — conta negativa | 49,3% |
+| `1` — até 200 DM | 39,0% |
+| `2` — 200 DM ou mais | 22,2% |
+| `3` — sem conta corrente | 11,7% |
+
+| `creditHistory` | Maus pagadores |
+| --------------- | -------------: |
+| `0` — nenhum crédito antes | 62,5% |
+| `1` — todos quitados neste banco | 57,1% |
+| `2` — em dia até agora | 31,9% |
+| `3` — atraso no passado | 31,8% |
+| `4` — conta crítica | 17,1% |
+
+`checkingStatus` se comporta: quanta mais folga na conta, menos inadimplência.
+
+Já `creditHistory` guarda a inversão mais famosa do dataset — quem tem **"conta crítica"** é o grupo que menos dá calote (17,1%), e quem **nunca pegou crédito** é o que mais dá (62,5%). Faz sentido depois de pensar: sem histórico não há o que avaliar, e o banco alemão só concedia crédito arriscado a quem já tinha se provado. Mas contraria a leitura ingênua da coluna, e é o tipo de coisa que só aparece olhando os dados.
+
+`savingsStatus` também não é uma escala pura: o nível `4` é "desconhecida / sem poupança", que é **ausência de dado disfarçada de magnitude**. Tratar isso direito pediria *one-hot* — anotado em [Próximas evoluções](#-próximas-evoluções).
+
+### Agora a normalização precisa ser medida
+
+Com dados inventados, as faixas eram conhecidas de antemão. Com dados reais, não:
+
+```javascript
+const fitMinMaxScaler = (customers, featureNames) => { /* mede mínimo e amplitude */ };
+
+const applyMinMaxScaler = (scaler, customer) => /* aplica o que foi medido */;
+```
+
+E medir tem hora certa — **depois** de separar treino e teste:
+
+```javascript
+const { trainCustomers, testCustomers } = splitCustomers(customers);
+
+const scaler = source.fitScaler(trainCustomers);           // só o treino
+const toVector = (customer) => source.toVector(customer, scaler);
+```
+
+Se o `min`/`max` saísse do dataset inteiro, o maior empréstimo do conjunto de teste passaria a influenciar a escala aplicada no treino. Isso é **vazamento (*data leakage*)**, e o efeito é sempre o mesmo: o modelo parece melhor na avaliação do que será diante de dados que nunca viu.
+
+É exatamente a dívida que o aviso lá de [Features de entrada](#-features-de-entrada) tinha registrado — e que só o dataset real obrigou a pagar.
+
+### Uma fonte, dois datasets
+
+Trocar de dataset não exigiu tocar em treino, matriz de confusão, ROC ou escolha de limiar. Tudo que muda de um para o outro ficou em um objeto:
+
+```javascript
+const GERMAN_SOURCE = {
+  id: 'german',
+  csvPath: GERMAN_CSV_PATH,
+  featureNames: GERMAN_FEATURES,
+
+  ensure: (filePath = GERMAN_CSV_PATH) => { /* confere que o arquivo existe */ },
+  read: () => readCustomersCsv(GERMAN_CSV_PATH),
+
+  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_FEATURES),
+  toVector: (customer, scaler) => applyMinMaxScaler(scaler, customer),
+
+  sampleCustomer: { /* cliente de exemplo para a inferência */ },
+};
+```
+
+A fonte sintética cumpre o mesmo contrato, com uma diferença que vale ler:
+
+```javascript
+  // A escala é CONHECIDA porque nós geramos os dados: "ajustar" aqui é
+  // devolver as constantes, e o argumento é ignorado de propósito.
+  fitScaler: () => null,
+  toVector: (customer) => toFeatureVector(customer),
+```
+
+E a única parte da rede que precisou saber qual dataset está em uso foi o tamanho da entrada:
+
+```javascript
+const model = buildModel(source.featureNames.length);   // 4 ou 8
+```
+
+### O resultado — e por que ele é a melhor parte
+
+```text
+Test accuracy: 0.7500
+Baseline (classe majoritária): 0.7150
+AUC: 0.7497
+```
+
+**A acurácia caiu de `0.99` para `0.75`.** E o número logo abaixo dela é o que importa: `0.7150` é o que se consegue **chutando "baixo risco" para todo mundo**, sem olhar feature nenhuma. O treino inteiro comprou 3,5 pontos percentuais.
+
+Pior: no limiar `0.5`, o modelo pega **24 dos 57** maus pagadores do conjunto de teste — recall de `0.4211`.
+
+```text
+Matriz de confusão (limiar 0.5):
+           | Predito BAIXO | Predito ALTO
+-----------+---------------+-------------
+Real BAIXO |      126 (TN) |      17 (FP)
+Real ALTO  |       33 (FN) |      24 (TP)
+```
+
+Se a acurácia fosse a única métrica do projeto, esse modelo passaria por bom. **É por isso que todas as outras existem.**
+
+E a AUC de `0.7497` diz que não é o modelo que está inútil — ele ordena os clientes bem acima do acaso. O que está errado é o corte:
+
+```text
+Ajuste do limiar (FP custa 1, FN custa 5):
+Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
+---------------+--------+--------+--------+----+----+------
+Padrão (0.5)   | 0.5000 | 0.1189 | 0.4211 | 17 | 33 |   182
+Youden (max J) | 0.2708 | 0.3147 | 0.7368 | 45 | 15 |   120
+Menor custo    | 0.1669 | 0.5245 | 0.8947 | 75 |  6 |   105
+```
+
+Descer o corte de `0.5` para `0.1669` derruba os falsos negativos de **33 para 6** e o custo de **182 para 105** — 42% mais barato, **sem retreinar nada**. O modelo sempre soube ordenar; faltava alguém escolher onde cortar.
+
+> 💡 Os custos `1` e `5` não são invenção deste projeto: são a **matriz de custo oficial do dataset**, publicada junto com ele. A UCI documenta que classificar um mau pagador como bom custa 5 vezes mais que o contrário. A `chooseThresholdByCost`, escrita antes de o dataset real entrar no projeto, já estava calibrada para ele.
+
+### Comparação lado a lado
+
+| Métrica | Sintético | German Credit |
+| ------- | --------: | ------------: |
+| Baseline (classe majoritária) | `0.5375` | `0.7150` |
+| Test accuracy | `0.9875` | `0.7500` |
+| **Ganho sobre o baseline** | **+45,0 pts** | **+3,5 pts** |
+| AUC | `0.9997` | `0.7497` |
+| Recall no limiar `0.5` | `1.0000` | `0.4211` |
+| Custo no limiar `0.5` | `3` | `182` |
+| Custo no limiar escolhido | `1` | `105` |
+
+O dataset sintético não estava errado — ele estava **fácil**. A regra existia, era determinística e cabia em quatro features. O German Credit é a lembrança de que, em dados reais, o teto raramente é o modelo: é o quanto de sinal existe nos dados.
+
+### Reprodutibilidade
+
+O arquivo real chega na ordem em que foi coletado, e essa ordem não é aleatória. O pipeline embaralha antes de dividir — com **semente fixa**:
+
+```javascript
+const SHUFFLE_SEED = 42;
+
+const customers = shuffle(await source.read(), createRandom(SHUFFLE_SEED));
+```
+
+`Math.random()` não aceita semente, então o projeto traz um gerador próprio (*mulberry32*, 32 bits). Sem ele, cada execução mediria um recorte diferente do dataset e nenhum número desta seção se reproduziria.
+
+Os pesos iniciais da rede continuam aleatórios, então as métricas ainda oscilam um pouco entre execuções — mas os **dados** não.
+
+### Procedência
+
+| | |
+| --- | --- |
+| **Fonte** | [UCI ML Repository — Statlog (German Credit Data)](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data) |
+| **Autor** | Prof. Dr. Hans Hofmann, Universität Hamburg (1994) |
+| **Licença** | CC BY 4.0 |
+| **Arquivo versionado** | `data/german-credit.csv` — 1.000 linhas, 9 colunas, ~23 KB |
+| **Como regerar** | `npm run fetch:german` |
+
+O CSV convertido é versionado para que `npm start` funcione **offline** logo depois do clone. O `scripts/fetch-german.js` existe para auditar a origem e regerar o arquivo: ele baixa da UCI e aplica `parseGermanCsv`, a mesma função coberta pelos testes.
 
 ---
 

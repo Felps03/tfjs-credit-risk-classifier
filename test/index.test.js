@@ -42,6 +42,27 @@ const {
   formatTable,
   formatThresholdComparison,
   evaluateModel,
+  GERMAN_CSV_PATH,
+  GERMAN_CODES,
+  GERMAN_FEATURES,
+  GERMAN_COLUMNS,
+  GERMAN_PRECISION,
+  SHUFFLE_SEED,
+  parseDelimited,
+  toOrdinal,
+  toGermanCustomer,
+  parseGermanCsv,
+  fitMinMaxScaler,
+  applyMinMaxScaler,
+  SYNTHETIC_SOURCE,
+  GERMAN_SOURCE,
+  SOURCES,
+  DEFAULT_SOURCE_ID,
+  resolveSourceId,
+  createRandom,
+  shuffle,
+  splitCustomers,
+  majorityBaseline,
 } = require('../index');
 
 // ==================================================
@@ -665,6 +686,24 @@ describe('splitDataset', () => {
 // Arquitetura do modelo
 // ==================================================
 describe('buildModel', () => {
+  it('dado o tamanho de entrada da fonte real, quando o modelo é criado, então aceita 8 features', () => {
+    // Given — o German Credit tem 8 features; o sintético, 4
+    const model = buildModel(GERMAN_FEATURES.length);
+
+    // When / Then
+    assert.deepEqual(model.inputs[0].shape, [null, 8]);
+    model.dispose();
+  });
+
+  it('dado nenhum tamanho, quando o modelo é criado, então mantém as 4 entradas do sintético', () => {
+    // Given — compatibilidade com as chamadas anteriores
+    const model = buildModel();
+
+    // When / Then
+    assert.deepEqual(model.inputs[0].shape, [null, 4]);
+    model.dispose();
+  });
+
   const model = buildModel();
 
   after(() => model.dispose());
@@ -1819,5 +1858,476 @@ describe('saveModel / loadModel', () => {
 
     // When / Then
     await assert.rejects(() => loadModel(inexistente));
+  });
+});
+
+// ==================================================
+// Dataset real: German Credit (UCI / Statlog)
+// ==================================================
+describe('parseDelimited', () => {
+  it('dado um texto com cabeçalho, quando parseado, então cada linha vira um objeto', () => {
+    // Given
+    const texto = 'a,b\n1,2\n3,4';
+
+    // When
+    const linhas = parseDelimited(texto);
+
+    // Then
+    assert.deepEqual(linhas, [{ a: '1', b: '2' }, { a: '3', b: '4' }]);
+  });
+
+  it('dado um arquivo com CRLF, quando parseado, então o \\r não contamina o último campo', () => {
+    // Given — arquivos da UCI já chegaram com quebra de linha do Windows
+    const texto = 'a,b\r\n1,2\r\n';
+
+    // When
+    const [linha] = parseDelimited(texto);
+
+    // Then
+    assert.equal(linha.b, '2');
+  });
+
+  it('dado um texto com quebra de linha no fim, quando parseado, então não gera linha vazia', () => {
+    // Given / When
+    const linhas = parseDelimited('a\n1\n2\n');
+
+    // Then
+    assert.equal(linhas.length, 2);
+  });
+});
+
+describe('toOrdinal', () => {
+  it('dado um código conhecido, quando convertido, então vira a posição na lista', () => {
+    // Given / When / Then
+    assert.equal(toOrdinal(GERMAN_CODES.checkingStatus, 'A11'), 0);
+    assert.equal(toOrdinal(GERMAN_CODES.checkingStatus, 'A14'), 3);
+  });
+
+  it('dado um código desconhecido, quando convertido, então lança em vez de virar 0', () => {
+    // Given — silenciar isso criaria uma feature plausível e errada
+    assert.throws(
+      () => toOrdinal(GERMAN_CODES.checkingStatus, 'A99'),
+      /Código desconhecido/,
+    );
+  });
+});
+
+describe('toGermanCustomer', () => {
+  // Primeira linha real do arquivo da UCI.
+  const linha = {
+    Attribute1: 'A11',
+    Attribute2: '6',
+    Attribute3: 'A34',
+    Attribute5: '1169',
+    Attribute6: 'A65',
+    Attribute7: 'A75',
+    Attribute8: '4',
+    Attribute13: '67',
+    class: '1',
+  };
+
+  it('dada uma linha do arquivo, quando convertida, então os códigos viram ordinais', () => {
+    // Given / When
+    const cliente = toGermanCustomer(linha);
+
+    // Then
+    assert.equal(cliente.checkingStatus, 0);
+    assert.equal(cliente.creditHistory, 4);
+    assert.equal(cliente.savingsStatus, 4);
+    assert.equal(cliente.employmentYears, 4);
+  });
+
+  it('dada uma linha do arquivo, quando convertida, então os numéricos viram Number', () => {
+    // Given / When
+    const cliente = toGermanCustomer(linha);
+
+    // Then
+    assert.equal(cliente.durationMonths, 6);
+    assert.equal(cliente.creditAmount, 1169);
+    assert.equal(cliente.installmentRate, 4);
+    assert.equal(cliente.age, 67);
+  });
+
+  it('dada a classe 2 do arquivo, quando convertida, então risk é 1 (mau pagador)', () => {
+    // Given — a UCI usa 1 = bom, 2 = mau; aqui risk = 1 é o ALTO RISCO
+    assert.equal(toGermanCustomer({ ...linha, class: '2' }).risk, 1);
+    assert.equal(toGermanCustomer({ ...linha, class: '1' }).risk, 0);
+  });
+
+  it('dada uma linha convertida, quando as features são lidas, então cobrem GERMAN_FEATURES', () => {
+    // Given / When
+    const cliente = toGermanCustomer(linha);
+
+    // Then — nenhuma feature declarada pode faltar no objeto
+    const faltando = GERMAN_FEATURES.filter((f) => !Number.isFinite(cliente[f]));
+    assert.deepEqual(faltando, []);
+  });
+});
+
+describe('parseGermanCsv', () => {
+  it('dado o texto bruto da UCI, quando parseado, então devolve clientes prontos', () => {
+    // Given
+    const texto = [
+      'Attribute1,Attribute2,Attribute3,Attribute5,Attribute6,Attribute7,Attribute8,Attribute13,class',
+      'A11,6,A34,1169,A65,A75,4,67,1',
+      'A12,48,A32,5951,A61,A73,2,22,2',
+    ].join('\n');
+
+    // When
+    const clientes = parseGermanCsv(texto);
+
+    // Then
+    assert.equal(clientes.length, 2);
+    assert.equal(clientes[0].risk, 0);
+    assert.equal(clientes[1].risk, 1);
+    assert.equal(clientes[1].durationMonths, 48);
+  });
+});
+
+describe('data/german-credit.csv', () => {
+  it('dado o arquivo versionado, quando lido, então tem as 1000 solicitações da UCI', async () => {
+    // Given / When
+    const clientes = await readCustomersCsv(GERMAN_CSV_PATH);
+
+    // Then
+    assert.equal(clientes.length, 1000);
+  });
+
+  it('dado o arquivo versionado, quando os rótulos são contados, então 300 são maus pagadores', async () => {
+    // Given — proporção documentada pela UCI; se mudar, a conversão quebrou
+    const clientes = await readCustomersCsv(GERMAN_CSV_PATH);
+
+    // When
+    const maus = clientes.filter(({ risk }) => risk === 1).length;
+
+    // Then
+    assert.equal(maus, 300);
+  });
+
+  it('dado o arquivo versionado, quando as colunas são lidas, então batem com GERMAN_COLUMNS', async () => {
+    // Given / When
+    const [cliente] = await readCustomersCsv(GERMAN_CSV_PATH);
+
+    // Then
+    assert.deepEqual(Object.keys(cliente).sort(), [...GERMAN_COLUMNS].sort());
+  });
+
+  it('dado o arquivo versionado, quando os valores são lidos, então são todos finitos', async () => {
+    // Given — um NaN aqui viraria loss NaN lá na frente, sem erro nenhum
+    const clientes = await readCustomersCsv(GERMAN_CSV_PATH);
+
+    // When
+    const invalidos = clientes.filter((cliente) =>
+      Object.values(cliente).some((valor) => !Number.isFinite(valor)));
+
+    // Then
+    assert.deepEqual(invalidos, []);
+  });
+});
+
+// ==================================================
+// Normalização ajustada no treino
+// ==================================================
+describe('fitMinMaxScaler / applyMinMaxScaler', () => {
+  const clientes = [
+    { a: 10, b: 5 },
+    { a: 20, b: 5 },
+    { a: 30, b: 5 },
+  ];
+
+  it('dados clientes, quando o scaler é ajustado, então guarda mínimo e amplitude', () => {
+    // Given / When
+    const scaler = fitMinMaxScaler(clientes, ['a']);
+
+    // Then
+    assert.equal(scaler.min.a, 10);
+    assert.equal(scaler.range.a, 20);
+  });
+
+  it('dado o scaler ajustado, quando aplicado, então mínimo vira 0 e máximo vira 1', () => {
+    // Given
+    const scaler = fitMinMaxScaler(clientes, ['a']);
+
+    // When / Then
+    assert.deepEqual(applyMinMaxScaler(scaler, { a: 10 }), [0]);
+    assert.deepEqual(applyMinMaxScaler(scaler, { a: 30 }), [1]);
+    assert.deepEqual(applyMinMaxScaler(scaler, { a: 20 }), [0.5]);
+  });
+
+  it('dada uma coluna constante, quando ajustada, então a amplitude vira 1 e não divide por zero', () => {
+    // Given — sem isso o resultado seria NaN e contaminaria o treino todo
+    const scaler = fitMinMaxScaler(clientes, ['b']);
+
+    // When / Then
+    assert.equal(scaler.range.b, 1);
+    assert.deepEqual(applyMinMaxScaler(scaler, { b: 5 }), [0]);
+  });
+
+  it('dado um valor fora da faixa de treino, quando aplicado, então sai de [0, 1] em vez de ser cortado', () => {
+    // Given — cortar esconderia justamente o caso extremo nunca visto
+    const scaler = fitMinMaxScaler(clientes, ['a']);
+
+    // When
+    const [abaixo] = applyMinMaxScaler(scaler, { a: 0 });
+    const [acima] = applyMinMaxScaler(scaler, { a: 50 });
+
+    // Then
+    assert.equal(abaixo, -0.5);
+    assert.equal(acima, 2);
+  });
+
+  it('dado um scaler ajustado só no treino, quando o teste tem extremos, então a escala não muda', () => {
+    // Given — este é o teste de VAZAMENTO: o teste não pode influenciar
+    // a escala, senão o modelo parece melhor do que é
+    const treino = [{ a: 10 }, { a: 20 }];
+    const teste = [{ a: 1000 }];
+
+    // When
+    const soTreino = fitMinMaxScaler(treino, ['a']);
+    const comTeste = fitMinMaxScaler([...treino, ...teste], ['a']);
+
+    // Then
+    assert.equal(soTreino.range.a, 10);
+    assert.notEqual(comTeste.range.a, soTreino.range.a);
+  });
+
+  it('dadas várias features, quando aplicadas, então a ordem do vetor segue featureNames', () => {
+    // Given — a ordem precisa casar com a ordem das entradas da rede
+    const scaler = fitMinMaxScaler([{ a: 0, b: 0 }, { a: 10, b: 100 }], ['b', 'a']);
+
+    // When / Then
+    assert.deepEqual(applyMinMaxScaler(scaler, { a: 10, b: 50 }), [0.5, 1]);
+  });
+});
+
+// ==================================================
+// Embaralhamento reproduzível e separação
+// ==================================================
+describe('createRandom / shuffle', () => {
+  it('dada a mesma semente, quando dois geradores rodam, então produzem a mesma sequência', () => {
+    // Given / When
+    const a = createRandom(42);
+    const b = createRandom(42);
+
+    // Then
+    assert.deepEqual([a(), a(), a()], [b(), b(), b()]);
+  });
+
+  it('dadas sementes diferentes, quando os geradores rodam, então divergem', () => {
+    // Given / When / Then
+    assert.notEqual(createRandom(1)(), createRandom(2)());
+  });
+
+  it('dado o gerador, quando amostrado, então os valores ficam em [0, 1)', () => {
+    // Given
+    const random = createRandom(7);
+
+    // When
+    const amostras = Array.from({ length: 500 }, random);
+
+    // Then
+    assert.ok(amostras.every((valor) => valor >= 0 && valor < 1));
+  });
+
+  it('dada uma lista, quando embaralhada, então é uma permutação dos mesmos itens', () => {
+    // Given
+    const itens = Array.from({ length: 50 }, (ignorado, i) => i);
+
+    // When
+    const embaralhado = shuffle(itens, createRandom(SHUFFLE_SEED));
+
+    // Then
+    assert.deepEqual([...embaralhado].sort((x, y) => x - y), itens);
+  });
+
+  it('dada uma lista, quando embaralhada, então a original não é modificada', () => {
+    // Given
+    const itens = [1, 2, 3, 4, 5];
+
+    // When
+    shuffle(itens, createRandom(1));
+
+    // Then
+    assert.deepEqual(itens, [1, 2, 3, 4, 5]);
+  });
+
+  it('dada a mesma semente, quando a lista é embaralhada duas vezes, então o resultado é idêntico', () => {
+    // Given — é o que torna a execução reproduzível
+    const itens = Array.from({ length: 30 }, (ignorado, i) => i);
+
+    // When / Then
+    assert.deepEqual(
+      shuffle(itens, createRandom(SHUFFLE_SEED)),
+      shuffle(itens, createRandom(SHUFFLE_SEED)),
+    );
+  });
+});
+
+describe('splitCustomers', () => {
+  const clientes = Array.from({ length: 100 }, (ignorado, i) => ({ id: i, risk: 0 }));
+
+  it('dados clientes, quando divididos em 80/20, então os tamanhos batem', () => {
+    // Given / When
+    const { trainCustomers, testCustomers } = splitCustomers(clientes);
+
+    // Then
+    assert.equal(trainCustomers.length, 80);
+    assert.equal(testCustomers.length, 20);
+  });
+
+  it('dados clientes divididos, quando as partes são comparadas, então não há sobreposição', () => {
+    // Given / When
+    const { trainCustomers, testCustomers } = splitCustomers(clientes);
+    const treino = new Set(trainCustomers.map(({ id }) => id));
+
+    // Then
+    assert.deepEqual(testCustomers.filter(({ id }) => treino.has(id)), []);
+  });
+
+  it('dada uma proporção customizada, quando dividido, então respeita a proporção', () => {
+    // Given / When
+    const { trainCustomers } = splitCustomers(clientes, 0.5);
+
+    // Then
+    assert.equal(trainCustomers.length, 50);
+  });
+});
+
+describe('majorityBaseline', () => {
+  it('dados rótulos majoritariamente negativos, quando medido, então devolve a fatia da classe majoritária', () => {
+    // Given — 7 baixos e 3 altos, como no German Credit
+    const labels = [...Array(7).fill([0]), ...Array(3).fill([1])];
+
+    // When / Then
+    assert.equal(majorityBaseline(labels), 0.7);
+  });
+
+  it('dados rótulos majoritariamente positivos, quando medido, então a maioria continua sendo o piso', () => {
+    // Given
+    const labels = [...Array(2).fill([0]), ...Array(8).fill([1])];
+
+    // When / Then
+    assert.equal(majorityBaseline(labels), 0.8);
+  });
+
+  it('dados rótulos equilibrados, quando medido, então o piso é 0.5', () => {
+    // Given / When / Then
+    assert.equal(majorityBaseline([[0], [1]]), 0.5);
+  });
+});
+
+// ==================================================
+// Fontes de dados
+// ==================================================
+describe('SOURCES / resolveSourceId', () => {
+  it('dado nenhum argumento, quando a fonte é resolvida, então o padrão é o dataset real', () => {
+    // Given / When / Then
+    assert.equal(resolveSourceId([]), 'german');
+    assert.equal(DEFAULT_SOURCE_ID, 'german');
+  });
+
+  it('dado --source=synthetic, quando resolvido, então escolhe o dataset sintético', () => {
+    // Given / When / Then
+    assert.equal(resolveSourceId(['--source=synthetic']), 'synthetic');
+  });
+
+  it('dada uma fonte inexistente, quando resolvida, então lança listando as válidas', () => {
+    // Given / When / Then
+    assert.throws(() => resolveSourceId(['--source=xpto']), /synthetic, german/);
+  });
+
+  it('dadas as fontes registradas, quando o contrato é conferido, então todas o cumprem', () => {
+    // Given — o pipeline depende de todas exporem a mesma superfície
+    const obrigatorios = [
+      'id', 'label', 'csvPath', 'columns', 'precision', 'featureNames',
+      'ensure', 'read', 'fitScaler', 'toVector', 'sampleCustomer',
+    ];
+
+    // When / Then
+    Object.values(SOURCES).forEach((source) => {
+      const faltando = obrigatorios.filter((chave) => source[chave] === undefined);
+      assert.deepEqual(faltando, [], `fonte ${source.id} não cumpre o contrato`);
+    });
+  });
+
+  it('dado o cliente de exemplo de cada fonte, quando vetorizado, então tem o tamanho das features', () => {
+    // Given / When / Then
+    Object.values(SOURCES).forEach((source) => {
+      const scaler = source.fitScaler([source.sampleCustomer]);
+      const vetor = source.toVector(source.sampleCustomer, scaler);
+
+      assert.equal(vetor.length, source.featureNames.length, `fonte ${source.id}`);
+    });
+  });
+
+  it('dada a fonte sintética, quando o scaler é ajustado, então não depende dos dados', () => {
+    // Given — nós geramos os dados, então a escala já era conhecida
+    assert.equal(SYNTHETIC_SOURCE.fitScaler([]), null);
+  });
+
+  it('dada a fonte sintética, quando vetorizada, então bate com toFeatureVector', () => {
+    // Given — as duas precisam ser o MESMO caminho de normalização
+    const cliente = SYNTHETIC_SOURCE.sampleCustomer;
+
+    // When / Then
+    assert.deepEqual(
+      SYNTHETIC_SOURCE.toVector(cliente, null),
+      toFeatureVector(cliente),
+    );
+  });
+
+  it('dada a fonte real, quando vetorizada com um scaler, então usa a escala medida', () => {
+    // Given
+    const treino = [
+      { ...GERMAN_SOURCE.sampleCustomer, age: 20 },
+      { ...GERMAN_SOURCE.sampleCustomer, age: 60 },
+    ];
+    const scaler = GERMAN_SOURCE.fitScaler(treino);
+    const posicaoIdade = GERMAN_FEATURES.indexOf('age');
+
+    // When
+    const vetor = GERMAN_SOURCE.toVector({ ...treino[0], age: 40 }, scaler);
+
+    // Then
+    assert.equal(vetor[posicaoIdade], 0.5);
+  });
+
+  it('dada a fonte real com o CSV em disco, quando ensure roda, então não lança', () => {
+    // Given — o arquivo é versionado, então quem clona já tem os dados
+    // When / Then
+    assert.equal(GERMAN_SOURCE.ensure().created, false);
+  });
+
+  it('dada a fonte real sem o CSV, quando ensure roda, então instrui a rodar o fetch', () => {
+    // Given — mensagem acionável em vez de stack trace
+    assert.throws(
+      () => GERMAN_SOURCE.ensure('/caminho/que/nao/existe.csv'),
+      /npm run fetch:german/,
+    );
+  });
+});
+
+describe('toCsv com schema da fonte', () => {
+  it('dado o schema do German Credit, quando serializado, então o cabeçalho é o dele', () => {
+    // Given
+    const cliente = { ...GERMAN_SOURCE.sampleCustomer, risk: 1 };
+
+    // When
+    const [cabecalho, linha] = toCsv([cliente], {
+      columns: GERMAN_COLUMNS,
+      precision: GERMAN_PRECISION,
+    }).split('\n');
+
+    // Then
+    assert.equal(cabecalho, GERMAN_COLUMNS.join(','));
+    assert.equal(linha, GERMAN_COLUMNS.map((c) => cliente[c]).join(','));
+  });
+
+  it('dado nenhum schema, quando serializado, então continua usando o sintético', () => {
+    // Given — compatibilidade: as chamadas antigas não mudaram de comportamento
+    const [cabecalho] = toCsv(createCustomers(1)).split('\n');
+
+    // Then
+    assert.equal(cabecalho, CSV_COLUMNS.join(','));
   });
 });
