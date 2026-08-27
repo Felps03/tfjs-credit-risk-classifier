@@ -1,0 +1,49 @@
+{
+  "name": "tfjs-credit-risk-classifier",
+  "version": "1.0.0",
+  "description": "Laboratório didático de classificação de risco de crédito com TensorFlow.js e uma rede neural MLP em Node.js: geração de dados sintéticos, normalização, treinamento com early stopping, avaliação em hold-out e inferência.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "keywords": [
+    "tensorflow",
+    "tensorflowjs",
+    "tfjs",
+    "tfjs-node",
+    "machine-learning",
+    "deep-learning",
+    "neural-network",
+    "mlp",
+    "multilayer-perceptron",
+    "binary-classification",
+    "credit-risk",
+    "credit-scoring",
+    "nodejs",
+    "javascript",
+    "educational"
+  ],
+  "author": {
+    "name": "felpsdev03",
+    "url": "https://github.com/Felps03"
+  },
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Felps03/tfjs-credit-risk-classifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Felps03/tfjs-credit-risk-classifier/issues"
+  },
+  "homepage": "https://github.com/Felps03/tfjs-credit-risk-classifier#readme",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0 <23.0.0"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0"
+  }
+}
