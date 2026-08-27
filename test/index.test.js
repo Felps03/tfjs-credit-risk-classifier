@@ -43,8 +43,21 @@ const {
   formatThresholdComparison,
   evaluateModel,
   GERMAN_CSV_PATH,
-  GERMAN_CODES,
-  GERMAN_FEATURES,
+  GERMAN_NUMERIC,
+  GERMAN_CATEGORICAL,
+  GERMAN_AUDIT_COLUMN,
+  GERMAN_AUDIT_CODES,
+  FEMALE_CODE,
+  oneHotEncode,
+  ordinalEncode,
+  germanFeatureNames,
+  toGermanVector,
+  isFemale,
+  summarizeGroup,
+  auditByGroup,
+  approvalRatio,
+  formatAudit,
+  GERMAN_ORDINAL_SOURCE,
   GERMAN_COLUMNS,
   GERMAN_PRECISION,
   SHUFFLE_SEED,
@@ -686,12 +699,13 @@ describe('splitDataset', () => {
 // Arquitetura do modelo
 // ==================================================
 describe('buildModel', () => {
-  it('dado o tamanho de entrada da fonte real, quando o modelo é criado, então aceita 8 features', () => {
-    // Given — o German Credit tem 8 features; o sintético, 4
-    const model = buildModel(GERMAN_FEATURES.length);
+  it('dado o tamanho de entrada da fonte real, quando o modelo é criado, então aceita 57 features', () => {
+    // Given — 7 numéricas + 50 níveis one-hot
+    const model = buildModel(GERMAN_SOURCE.featureNames.length);
 
     // When / Then
-    assert.deepEqual(model.inputs[0].shape, [null, 8]);
+    assert.deepEqual(model.inputs[0].shape, [null, 57]);
+    assert.equal(model.countParams(), 1073);
     model.dispose();
   });
 
@@ -1899,43 +1913,35 @@ describe('parseDelimited', () => {
 describe('toOrdinal', () => {
   it('dado um código conhecido, quando convertido, então vira a posição na lista', () => {
     // Given / When / Then
-    assert.equal(toOrdinal(GERMAN_CODES.checkingStatus, 'A11'), 0);
-    assert.equal(toOrdinal(GERMAN_CODES.checkingStatus, 'A14'), 3);
+    assert.equal(toOrdinal(GERMAN_CATEGORICAL.checkingStatus, 'A11'), 0);
+    assert.equal(toOrdinal(GERMAN_CATEGORICAL.checkingStatus, 'A14'), 3);
+  });
+
+  it('dado A410 e A41, quando convertidos, então não são confundidos um com o outro', () => {
+    // Given — 'A41' é prefixo de 'A410'; indexOf compara igualdade, não prefixo
+    assert.equal(toOrdinal(GERMAN_CATEGORICAL.purpose, 'A41'), 1);
+    assert.equal(toOrdinal(GERMAN_CATEGORICAL.purpose, 'A410'), 9);
   });
 
   it('dado um código desconhecido, quando convertido, então lança em vez de virar 0', () => {
     // Given — silenciar isso criaria uma feature plausível e errada
     assert.throws(
-      () => toOrdinal(GERMAN_CODES.checkingStatus, 'A99'),
+      () => toOrdinal(GERMAN_CATEGORICAL.checkingStatus, 'A99'),
       /Código desconhecido/,
     );
   });
 });
 
 describe('toGermanCustomer', () => {
-  // Primeira linha real do arquivo da UCI.
+  // Primeira linha real do arquivo da UCI, com os 20 atributos.
   const linha = {
-    Attribute1: 'A11',
-    Attribute2: '6',
-    Attribute3: 'A34',
-    Attribute5: '1169',
-    Attribute6: 'A65',
-    Attribute7: 'A75',
-    Attribute8: '4',
-    Attribute13: '67',
+    Attribute1: 'A11', Attribute2: '6', Attribute3: 'A34', Attribute4: 'A43',
+    Attribute5: '1169', Attribute6: 'A65', Attribute7: 'A75', Attribute8: '4',
+    Attribute9: 'A93', Attribute10: 'A101', Attribute11: '4', Attribute12: 'A121',
+    Attribute13: '67', Attribute14: 'A143', Attribute15: 'A152', Attribute16: '2',
+    Attribute17: 'A173', Attribute18: '1', Attribute19: 'A192', Attribute20: 'A201',
     class: '1',
   };
-
-  it('dada uma linha do arquivo, quando convertida, então os códigos viram ordinais', () => {
-    // Given / When
-    const cliente = toGermanCustomer(linha);
-
-    // Then
-    assert.equal(cliente.checkingStatus, 0);
-    assert.equal(cliente.creditHistory, 4);
-    assert.equal(cliente.savingsStatus, 4);
-    assert.equal(cliente.employmentYears, 4);
-  });
 
   it('dada uma linha do arquivo, quando convertida, então os numéricos viram Number', () => {
     // Given / When
@@ -1944,8 +1950,21 @@ describe('toGermanCustomer', () => {
     // Then
     assert.equal(cliente.durationMonths, 6);
     assert.equal(cliente.creditAmount, 1169);
-    assert.equal(cliente.installmentRate, 4);
     assert.equal(cliente.age, 67);
+    assert.equal(cliente.existingCredits, 2);
+    assert.equal(cliente.dependents, 1);
+  });
+
+  it('dada uma linha do arquivo, quando convertida, então os códigos viram índices', () => {
+    // Given / When
+    const cliente = toGermanCustomer(linha);
+
+    // Then
+    assert.equal(cliente.checkingStatus, 0);   // A11
+    assert.equal(cliente.creditHistory, 4);    // A34
+    assert.equal(cliente.purpose, 3);          // A43
+    assert.equal(cliente.housing, 1);          // A152
+    assert.equal(cliente.foreignWorker, 0);    // A201
   });
 
   it('dada a classe 2 do arquivo, quando convertida, então risk é 1 (mau pagador)', () => {
@@ -1954,33 +1973,36 @@ describe('toGermanCustomer', () => {
     assert.equal(toGermanCustomer({ ...linha, class: '1' }).risk, 0);
   });
 
-  it('dada uma linha convertida, quando as features são lidas, então cobrem GERMAN_FEATURES', () => {
+  it('dada uma linha convertida, quando as colunas são lidas, então cobrem GERMAN_COLUMNS', () => {
     // Given / When
     const cliente = toGermanCustomer(linha);
 
-    // Then — nenhuma feature declarada pode faltar no objeto
-    const faltando = GERMAN_FEATURES.filter((f) => !Number.isFinite(cliente[f]));
+    // Then — nenhuma coluna declarada pode faltar
+    const faltando = GERMAN_COLUMNS.filter((c) => !Number.isFinite(cliente[c]));
     assert.deepEqual(faltando, []);
+  });
+
+  it('dada uma linha convertida, quando o atributo 9 é lido, então vira a coluna de auditoria', () => {
+    // Given — 'A93' é o terceiro código da lista
+    assert.equal(toGermanCustomer(linha)[GERMAN_AUDIT_COLUMN], 2);
   });
 });
 
 describe('parseGermanCsv', () => {
-  it('dado o texto bruto da UCI, quando parseado, então devolve clientes prontos', () => {
-    // Given
-    const texto = [
-      'Attribute1,Attribute2,Attribute3,Attribute5,Attribute6,Attribute7,Attribute8,Attribute13,class',
-      'A11,6,A34,1169,A65,A75,4,67,1',
-      'A12,48,A32,5951,A61,A73,2,22,2',
-    ].join('\n');
+  const cabecalho = Array.from({ length: 20 }, (u, i) => `Attribute${i + 1}`)
+    .concat('class').join(',');
+  const linha = (classe) =>
+    `A11,6,A34,A43,1169,A65,A75,4,A93,A101,4,A121,67,A143,A152,2,A173,1,A192,A201,${classe}`;
 
-    // When
-    const clientes = parseGermanCsv(texto);
+  it('dado o texto bruto da UCI, quando parseado, então devolve clientes prontos', () => {
+    // Given / When
+    const clientes = parseGermanCsv([cabecalho, linha(1), linha(2)].join('\n'));
 
     // Then
     assert.equal(clientes.length, 2);
     assert.equal(clientes[0].risk, 0);
     assert.equal(clientes[1].risk, 1);
-    assert.equal(clientes[1].durationMonths, 48);
+    assert.equal(clientes[0].durationMonths, 6);
   });
 });
 
@@ -2233,7 +2255,10 @@ describe('SOURCES / resolveSourceId', () => {
 
   it('dada uma fonte inexistente, quando resolvida, então lança listando as válidas', () => {
     // Given / When / Then
-    assert.throws(() => resolveSourceId(['--source=xpto']), /synthetic, german/);
+    assert.throws(
+      () => resolveSourceId(['--source=xpto']),
+      /synthetic, german, german-ordinal/,
+    );
   });
 
   it('dadas as fontes registradas, quando o contrato é conferido, então todas o cumprem', () => {
@@ -2283,7 +2308,7 @@ describe('SOURCES / resolveSourceId', () => {
       { ...GERMAN_SOURCE.sampleCustomer, age: 60 },
     ];
     const scaler = GERMAN_SOURCE.fitScaler(treino);
-    const posicaoIdade = GERMAN_FEATURES.indexOf('age');
+    const posicaoIdade = GERMAN_SOURCE.featureNames.indexOf('age');
 
     // When
     const vetor = GERMAN_SOURCE.toVector({ ...treino[0], age: 40 }, scaler);
@@ -2329,5 +2354,269 @@ describe('toCsv com schema da fonte', () => {
 
     // Then
     assert.equal(cabecalho, CSV_COLUMNS.join(','));
+  });
+});
+
+// ==================================================
+// Codificação one-hot das colunas qualitativas
+// ==================================================
+describe('oneHotEncode / ordinalEncode', () => {
+  it('dado um índice, quando codificado em one-hot, então só aquela posição vale 1', () => {
+    // Given / When
+    const vetor = oneHotEncode(4, 2);
+
+    // Then
+    assert.deepEqual(vetor, [0, 0, 1, 0]);
+  });
+
+  it('dado qualquer índice, quando codificado, então a soma do vetor é sempre 1', () => {
+    // Given — é o que garante que nenhuma categoria "pesa" mais que outra
+    for (let indice = 0; indice < 5; indice += 1) {
+      const vetor = oneHotEncode(5, indice);
+
+      assert.equal(vetor.reduce((total, valor) => total + valor, 0), 1);
+      assert.equal(vetor.length, 5);
+    }
+  });
+
+  it('dada uma categoria única, quando codificada, então o vetor tem largura 1', () => {
+    // Given / When / Then
+    assert.deepEqual(oneHotEncode(1, 0), [1]);
+  });
+
+  it('dado um índice, quando codificado como ordinal, então vira um único número em [0, 1]', () => {
+    // Given — a codificação que o one-hot substitui
+    assert.deepEqual(ordinalEncode(5, 0), [0]);
+    assert.deepEqual(ordinalEncode(5, 4), [1]);
+    assert.deepEqual(ordinalEncode(5, 2), [0.5]);
+  });
+
+  it('dada uma categoria única, quando codificada como ordinal, então não divide por zero', () => {
+    // Given / When / Then
+    assert.deepEqual(ordinalEncode(1, 0), [0]);
+  });
+});
+
+describe('germanFeatureNames / toGermanVector', () => {
+  const clientes = [
+    { ...GERMAN_SOURCE.sampleCustomer, age: 20, creditAmount: 1000 },
+    { ...GERMAN_SOURCE.sampleCustomer, age: 60, creditAmount: 5000 },
+  ];
+
+  it('dada a codificação one-hot, quando os nomes são gerados, então há 57 features', () => {
+    // Given — 7 numéricas + 50 níveis categóricos
+    const niveis = Object.values(GERMAN_CATEGORICAL)
+      .reduce((total, codes) => total + codes.length, 0);
+
+    // Then
+    assert.equal(niveis, 50);
+    assert.equal(germanFeatureNames('onehot').length, 57);
+  });
+
+  it('dada a codificação ordinal, quando os nomes são gerados, então há 19 features', () => {
+    // Given — 7 numéricas + 12 categóricas, uma coluna cada
+    assert.equal(germanFeatureNames('ordinal').length, 19);
+  });
+
+  it('dados os nomes one-hot, quando lidos, então cada nível vira "campo=código"', () => {
+    // Given / When
+    const nomes = germanFeatureNames('onehot');
+
+    // Then
+    assert.ok(nomes.includes('checkingStatus=A11'));
+    assert.ok(nomes.includes('purpose=A410'));
+    assert.equal(nomes[0], 'durationMonths');
+  });
+
+  it('dado um cliente, quando vetorizado, então o vetor tem o tamanho dos nomes', () => {
+    // Given — se estes divergirem, um peso da rede aponta para a coluna errada
+    const scaler = GERMAN_SOURCE.fitScaler(clientes);
+
+    // When / Then
+    assert.equal(
+      toGermanVector(clientes[0], scaler, 'onehot').length,
+      germanFeatureNames('onehot').length,
+    );
+    assert.equal(
+      toGermanVector(clientes[0], scaler, 'ordinal').length,
+      germanFeatureNames('ordinal').length,
+    );
+  });
+
+  it('dado um cliente, quando vetorizado, então as numéricas vêm primeiro e escaladas', () => {
+    // Given
+    const scaler = GERMAN_SOURCE.fitScaler(clientes);
+
+    // When
+    const vetor = toGermanVector({ ...clientes[0], age: 40 }, scaler, 'onehot');
+    const posicaoIdade = germanFeatureNames('onehot').indexOf('age');
+
+    // Then — 40 no meio de [20, 60]
+    assert.equal(vetor[posicaoIdade], 0.5);
+  });
+
+  it('dado um cliente, quando vetorizado em one-hot, então o bloco categórico só tem 0 e 1', () => {
+    // Given
+    const scaler = GERMAN_SOURCE.fitScaler(clientes);
+
+    // When
+    const vetor = toGermanVector(clientes[0], scaler, 'onehot');
+    const categorico = vetor.slice(GERMAN_NUMERIC.length);
+
+    // Then
+    assert.ok(categorico.every((valor) => valor === 0 || valor === 1));
+    // Uma coluna qualitativa acesa por campo
+    assert.equal(
+      categorico.reduce((total, valor) => total + valor, 0),
+      Object.keys(GERMAN_CATEGORICAL).length,
+    );
+  });
+
+  it('dado o mesmo cliente, quando vetorizado nas duas codificações, então os vetores diferem', () => {
+    // Given — a troca de codificação precisa realmente mudar a entrada
+    const scaler = GERMAN_SOURCE.fitScaler(clientes);
+
+    // When / Then
+    assert.notDeepEqual(
+      toGermanVector(clientes[0], scaler, 'onehot'),
+      toGermanVector(clientes[0], scaler, 'ordinal'),
+    );
+  });
+});
+
+// ==================================================
+// Auditoria de disparidade
+// ==================================================
+describe('isFemale / summarizeGroup / auditByGroup', () => {
+  const cliente = (personalStatus, risk) => ({ [GERMAN_AUDIT_COLUMN]: personalStatus, risk });
+  const indiceFeminino = GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+  it('dado o código A92, quando o grupo é lido, então é o feminino', () => {
+    // Given — A92 é o único código feminino presente no arquivo
+    assert.equal(isFemale(cliente(indiceFeminino, 0)), true);
+    assert.equal(isFemale(cliente(0, 0)), false);
+    assert.equal(isFemale(cliente(2, 0)), false);
+  });
+
+  it('dado um grupo, quando resumido, então separa taxa real de taxa marcada', () => {
+    // Given — 2 de 4 são maus pagadores; o modelo marca 3
+    const linhas = [
+      { risk: 1, score: 0.9 }, { risk: 1, score: 0.2 },
+      { risk: 0, score: 0.8 }, { risk: 0, score: 0.7 },
+    ];
+
+    // When
+    const resumo = summarizeGroup(linhas, 0.5);
+
+    // Then
+    assert.equal(resumo.total, 4);
+    assert.equal(resumo.baseRate, 0.5);          // 2 de 4 são realmente ruins
+    assert.equal(resumo.flaggedRate, 0.75);      // 3 de 4 foram marcados
+    assert.equal(resumo.falseNegativeRate, 0.5); // 1 dos 2 ruins escapou
+  });
+
+  it('dado um grupo sem positivos, quando resumido, então o FNR é 0 e não NaN', () => {
+    // Given / When
+    const resumo = summarizeGroup([{ risk: 0, score: 0.1 }], 0.5);
+
+    // Then
+    assert.equal(resumo.falseNegativeRate, 0);
+  });
+
+  it('dados dois grupos tratados igual, quando auditados, então a razão é 1', () => {
+    // Given — os dois totalmente marcados: 0/0 é tratamento idêntico,
+    // não disparidade máxima
+    const customers = [cliente(indiceFeminino, 0), cliente(0, 0)];
+
+    // When / Then
+    assert.equal(auditByGroup(customers, [0.9, 0.9], 0.5).approvalRatio, 1);
+    assert.equal(auditByGroup(customers, [0.1, 0.1], 0.5).approvalRatio, 1);
+  });
+
+  it('dado nenhum homem aprovado e alguma mulher sim, quando auditado, então a razão é infinita', () => {
+    // Given — disparidade sem limite superior, e é literalmente o caso
+    const customers = [cliente(indiceFeminino, 0), cliente(0, 0)];
+
+    // When
+    const { approvalRatio } = auditByGroup(customers, [0.1, 0.9], 0.5);
+
+    // Then
+    assert.equal(approvalRatio, Infinity);
+  });
+
+  it('dado um grupo marcado mais que o outro, quando auditado, então a razão cai abaixo de 1', () => {
+    // Given — todas as mulheres marcadas, nenhum homem
+    const customers = [
+      cliente(indiceFeminino, 0), cliente(indiceFeminino, 0),
+      cliente(0, 0), cliente(0, 0),
+    ];
+    const scores = [0.9, 0.9, 0.1, 0.1];
+
+    // When
+    const auditoria = auditByGroup(customers, scores, 0.5);
+
+    // Then
+    assert.equal(auditoria.women.flaggedRate, 1);
+    assert.equal(auditoria.men.flaggedRate, 0);
+    assert.equal(auditoria.approvalRatio, 0);
+  });
+
+  it('dada uma auditoria, quando formatada, então mostra os dois grupos e a razão', () => {
+    // Given
+    const customers = [cliente(indiceFeminino, 1), cliente(0, 0)];
+
+    // When
+    const texto = formatAudit(auditByGroup(customers, [0.9, 0.1], 0.5));
+
+    // Then
+    assert.ok(texto.includes('Mulheres'));
+    assert.ok(texto.includes('Homens'));
+    assert.ok(texto.includes('regra dos 4/5'));
+  });
+});
+
+describe('atributo protegido fora do modelo', () => {
+  it('dadas as features da fonte real, quando procuradas, então nenhuma vem do sexo', () => {
+    // Given — este é o teste que impede a coluna de voltar por descuido
+    const suspeitas = GERMAN_SOURCE.featureNames.filter((nome) =>
+      nome.toLowerCase().includes(GERMAN_AUDIT_COLUMN.toLowerCase())
+      || GERMAN_AUDIT_CODES.some((codigo) => nome.endsWith(`=${codigo}`)));
+
+    // Then
+    assert.deepEqual(suspeitas, []);
+  });
+
+  it('dada a coluna de auditoria, quando o CSV é lido, então ela existe no arquivo', () => {
+    // Given — fora do modelo, mas presente para auditar
+    assert.ok(GERMAN_COLUMNS.includes(GERMAN_AUDIT_COLUMN));
+    assert.ok(!GERMAN_SOURCE.featureNames.includes(GERMAN_AUDIT_COLUMN));
+  });
+
+  it('dado o scaler da fonte real, quando ajustado, então não mede a coluna de auditoria', () => {
+    // Given / When
+    const scaler = GERMAN_SOURCE.fitScaler([GERMAN_SOURCE.sampleCustomer]);
+
+    // Then
+    assert.deepEqual(scaler.featureNames, GERMAN_NUMERIC);
+    assert.equal(scaler.min[GERMAN_AUDIT_COLUMN], undefined);
+  });
+});
+
+describe('createGermanSource', () => {
+  it('dadas as duas variantes, quando comparadas, então diferem só na codificação', () => {
+    // Given / When / Then
+    assert.equal(GERMAN_SOURCE.encoding, 'onehot');
+    assert.equal(GERMAN_ORDINAL_SOURCE.encoding, 'ordinal');
+    assert.equal(GERMAN_SOURCE.csvPath, GERMAN_ORDINAL_SOURCE.csvPath);
+    assert.deepEqual(GERMAN_SOURCE.columns, GERMAN_ORDINAL_SOURCE.columns);
+    assert.notEqual(
+      GERMAN_SOURCE.featureNames.length,
+      GERMAN_ORDINAL_SOURCE.featureNames.length,
+    );
+  });
+
+  it('dada a variante ordinal, quando registrada, então está disponível por --source', () => {
+    // Given / When / Then
+    assert.equal(resolveSourceId(['--source=german-ordinal']), 'german-ordinal');
   });
 });

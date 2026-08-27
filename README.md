@@ -45,6 +45,8 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 - [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos)
 - [Carregando dados de um CSV](#-carregando-dados-de-um-csv)
 - [Dataset real: German Credit](#-dataset-real-german-credit)
+  - [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal)
+  - [A coluna que o modelo não recebeu](#a-coluna-que-o-modelo-não-recebeu)
 - [Arquitetura da rede](#-arquitetura-da-rede)
 - [Treinamento](#-treinamento)
 - [Divisão dos dados](#-divisão-dos-dados)
@@ -176,17 +178,22 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede:
 | `loadDatasetCsv`       | Formato igual ao de `createDataset`, features em `[0, 1]`, mesma `toFeatureVector` e treino rodando a partir do arquivo |
 | `splitDataset`         | Proporções, nada perdido e **ausência de sobreposição entre treino e teste**  |
 | `parseDelimited`       | Cabeçalho vira chave, CRLF do Windows e quebra de linha final sem gerar linha vazia |
-| `toOrdinal`            | Código conhecido vira posição; código desconhecido **lança** em vez de virar `0` |
-| `toGermanCustomer`     | Códigos → ordinais, numéricos → `Number`, `class 2` → `risk 1` e cobertura de todas as features |
+| `toOrdinal`            | Código conhecido vira posição, `A41` não é confundido com `A410` e código desconhecido **lança** em vez de virar `0` |
+| `toGermanCustomer`     | Numéricos → `Number`, códigos → índices, `class 2` → `risk 1`, cobertura de todas as colunas e o atributo 9 indo para a coluna de auditoria |
+| `oneHotEncode` / `ordinalEncode` | Posição acesa, soma sempre `1`, largura correta e categoria única sem divisão por zero |
+| `germanFeatureNames` / `toGermanVector` | **57** entradas em one-hot e **19** em ordinal, nomes `campo=código`, vetor do mesmo tamanho dos nomes, numéricas primeiro e bloco categórico só com `0` e `1` |
+| Atributo protegido | **Nenhuma feature vem do sexo**, a coluna existe no CSV mas não no modelo, e o scaler não a mede |
+| `isFemale` / `summarizeGroup` / `auditByGroup` | Identificação do grupo, taxa real separada da marcada, FNR sem `NaN`, paridade quando o tratamento é igual e razão infinita quando um grupo não tem aprovação |
+| `createGermanSource` | As duas variantes diferem só na codificação e a ordinal é alcançável por `--source` |
 | `parseGermanCsv`       | Texto bruto da UCI → clientes prontos, ponta a ponta |
-| `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as colunas declaradas e nenhum valor não-finito |
+| `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as 21 colunas declaradas e nenhum valor não-finito |
 | `fitMinMaxScaler` / `applyMinMaxScaler` | Mínimo e amplitude, coluna constante sem divisão por zero, valor fora da faixa **não** cortado, ordem do vetor e **ausência de vazamento do teste para a escala** |
 | `createRandom` / `shuffle` | Mesma semente → mesma sequência, faixa `[0, 1)`, permutação, entrada não modificada e embaralhamento reproduzível |
 | `splitCustomers`       | Proporções e ausência de sobreposição, agora sobre clientes brutos |
 | `majorityBaseline`     | Piso da classe majoritária com maioria negativa, positiva e empate |
 | `SOURCES` / `resolveSourceId` | Padrão, seleção por flag, fonte inválida, **contrato cumprido por todas as fontes**, tamanho do vetor, escala medida e mensagem acionável quando o CSV real falta |
 | `toCsv` com schema     | Cabeçalho do German Credit e compatibilidade da chamada sem opções |
-| `buildModel`           | 3 camadas, entrada `[null, 4]` ou `[null, 8]`, saída `[null, 1]`, **225 parâmetros**, ativações e loss |
+| `buildModel`           | 3 camadas, entrada `[null, 4]` ou `[null, 57]`, saída `[null, 1]`, **225** e **1.073 parâmetros**, ativações e loss |
 | `computeConfusionMatrix` | TP/TN/FP/FN contra predições conhecidas, layout da matriz, efeito do limiar, coerência com a `accuracy` do `evaluate` e ausência de vazamento de tensores |
 | `formatConfusionMatrix` | Estrutura da tabela, as quatro contagens presentes e colunas alinhadas |
 | `computeMetrics` | Fórmulas contra cálculo manual, F1 conferido pelas duas formas, casos degenerados sem `NaN` e a média harmônica abaixo da aritmética |
@@ -265,7 +272,7 @@ const toFeatureVector = ({
 >
 > É exatamente o que o [dataset real](#agora-a-normalização-precisa-ser-medida) obrigou a fazer: lá as faixas são **medidas**, e só sobre o treino.
 
-As features acima descrevem o dataset sintético. O dataset real tem [as suas próprias oito](#as-8-features-escolhidas) — e o pipeline atende as duas sem saber qual está em uso.
+As features acima descrevem o dataset sintético. O dataset real tem [as suas próprias dezenove](#as-19-colunas-usadas) — e o pipeline atende as duas sem saber qual está em uso.
 
 ---
 
@@ -398,59 +405,74 @@ O **German Credit** troca esse conforto por realidade: 1.000 solicitações de c
 
 ```bash
 npm run fetch:german     # baixa da UCI e converte (o CSV já vem versionado)
-npm start                # roda no dataset real — passou a ser o padrão
+npm start                # dataset real, codificação one-hot — o padrão
+npm run start:ordinal    # mesmas colunas, codificação ordinal (comparação)
 npm run start:synthetic  # o laboratório sintético continua a um argumento
 ```
 
 | | Sintético | German Credit |
 | --- | ---: | ---: |
 | Clientes | 1.200 | 1.000 |
-| Features | 4 | 8 |
+| Colunas usadas | 4 | 19 (de 20) |
+| Entradas da rede | 4 | 57 (one-hot) |
 | Alto risco | ~46% | 30% |
 | Origem dos rótulos | fórmula conhecida | comportamento real |
 | Ruído | nenhum | todo o que a realidade tem |
 
-### As 8 features escolhidas
+### As 19 colunas usadas
 
-Das 20 colunas originais, o projeto usa 8 — as que têm **ordem natural**, porque codificar como ordinal só faz sentido quando existe um "mais" e um "menos":
+Das 20 do arquivo original, o projeto usa 19 — **sete numéricas** e **doze qualitativas**:
 
-| Feature | Origem | Significado |
-| ------- | ------ | ----------- |
-| `checkingStatus` | Attr. 1 | Saldo da conta corrente, de negativo (`0`) a sem conta (`3`) |
-| `durationMonths` | Attr. 2 | Prazo do empréstimo, `4` a `72` meses |
-| `creditHistory` | Attr. 3 | Histórico, de "sem crédito anterior" (`0`) a "conta crítica" (`4`) |
-| `creditAmount` | Attr. 5 | Valor pedido, `250` a `18.424` marcos |
-| `savingsStatus` | Attr. 6 | Poupança, de `< 100 DM` (`0`) a desconhecida (`4`) |
-| `employmentYears` | Attr. 7 | Tempo de emprego, de desempregado (`0`) a `≥ 7 anos` (`4`) |
-| `installmentRate` | Attr. 8 | Prestação como % da renda disponível, `1` a `4` |
-| `age` | Attr. 13 | Idade, `19` a `75` |
+| Numéricas | Faixa | | Qualitativas | Níveis |
+| --------- | ----- | --- | ------------ | -----: |
+| `durationMonths` | 4 – 72 meses | | `checkingStatus` | 4 |
+| `creditAmount` | 250 – 18.424 DM | | `creditHistory` | 5 |
+| `installmentRate` | 1 – 4 (% da renda) | | `purpose` | 10 |
+| `residenceSince` | 1 – 4 anos | | `savingsStatus` | 5 |
+| `age` | 19 – 75 anos | | `employmentYears` | 5 |
+| `existingCredits` | 1 – 4 | | `otherDebtors` | 3 |
+| `dependents` | 1 – 2 | | `property` | 4 |
+| | | | `otherInstallments` | 3 |
+| | | | `housing` | 3 |
+| | | | `job` | 4 |
+| | | | `telephone` | 2 |
+| | | | `foreignWorker` | 2 |
 
-> ⚖️ O **atributo 9 (estado civil e sexo) ficou de fora de propósito.** Usar sexo para negar crédito é discriminação e é ilegal em vários países — e é justamente por conter essa coluna que o German Credit virou caso clássico da literatura de *fairness*. A coluna existe no arquivo; não entra no modelo.
+As doze qualitativas somam **50 níveis**. Com one-hot, o vetor de entrada tem `7 + 50 = 57` posições.
 
-### A ordem que os dados nem sempre têm
+> ⚖️ A vigésima coluna — **atributo 9, estado civil e sexo** — é lida e vai para o CSV, mas **não entra no modelo**. Ela tem outro papel: [auditar](#a-coluna-que-o-modelo-não-recebeu) as decisões depois que já foram tomadas.
 
-Codificar categoria como ordinal **impõe** uma ordem. Vale conferir se os dados concordam:
+### Por que one-hot e não ordinal
 
-| `checkingStatus` | Maus pagadores |
-| ---------------- | -------------: |
-| `0` — conta negativa | 49,3% |
-| `1` — até 200 DM | 39,0% |
-| `2` — 200 DM ou mais | 22,2% |
-| `3` — sem conta corrente | 11,7% |
+A versão anterior codificava as qualitativas como inteiro: `checkingStatus` virava `0, 1, 2, 3`. Isso é conveniente e, na maioria das colunas, é uma **mentira**.
 
-| `creditHistory` | Maus pagadores |
-| --------------- | -------------: |
-| `0` — nenhum crédito antes | 62,5% |
-| `1` — todos quitados neste banco | 57,1% |
-| `2` — em dia até agora | 31,9% |
-| `3` — atraso no passado | 31,8% |
-| `4` — conta crítica | 17,1% |
+Dizer que `purpose = 3` fica entre `2` e `4` afirma que "eletrodoméstico", "rádio/TV" e "reparos" estão em uma escala — e não estão. Não existe ordem entre finalidades de empréstimo. A rede recebia uma relação que ninguém quis afirmar.
 
-`checkingStatus` se comporta: quanta mais folga na conta, menos inadimplência.
+One-hot desfaz a suposição. Cada categoria vira uma coluna própria:
 
-Já `creditHistory` guarda a inversão mais famosa do dataset — quem tem **"conta crítica"** é o grupo que menos dá calote (17,1%), e quem **nunca pegou crédito** é o que mais dá (62,5%). Faz sentido depois de pensar: sem histórico não há o que avaliar, e o banco alemão só concedia crédito arriscado a quem já tinha se provado. Mas contraria a leitura ingênua da coluna, e é o tipo de coisa que só aparece olhando os dados.
+```javascript
+//   purpose = 3  ->  ordinal: [0.333]
+//                    one-hot: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+const oneHotEncode = (size, index) =>
+  Array.from({ length: size }, (unused, position) => (position === index ? 1 : 0));
+```
 
-`savingsStatus` também não é uma escala pura: o nível `4` é "desconhecida / sem poupança", que é **ausência de dado disfarçada de magnitude**. Tratar isso direito pediria *one-hot* — anotado em [Próximas evoluções](#-próximas-evoluções).
+Nenhuma categoria fica "maior" que outra, e a rede aprende **um peso independente para cada uma** em vez de um peso único multiplicado por um número arbitrário.
+
+Duas colunas continuam sendo tratadas como número, de propósito: `installmentRate` (1 a 4, percentual da renda comprometida) e `residenceSince` (anos no endereço) têm ordem de verdade. A UCI as documenta como numéricas, e é o que são.
+
+> 📐 Com todos os níveis presentes há colinearidade perfeita — as quatro colunas de `checkingStatus` sempre somam 1, então uma é dedutível das outras. É a *dummy variable trap*, e em regressão linear ela quebra a inversão da matriz. Em rede neural com viés e ativação não-linear isso não é um problema prático, e é o padrão do Keras — por isso o projeto mantém todos os níveis.
+
+### O CSV guarda códigos, não features
+
+O arquivo continua com uma coluna por atributo, e a qualitativa é gravada como o **índice** do código:
+
+```text
+durationMonths,creditAmount,...,checkingStatus,creditHistory,purpose,...,personalStatus,risk
+6,1169,...,0,4,3,...,2,0
+```
+
+O `3` em `purpose` **não é uma quantidade** — é "A43", rádio/TV. O one-hot acontece na hora de montar o vetor, não na hora de gravar. É a mesma decisão de [guardar dados brutos](#o-csv-guarda-dados-brutos): se o arquivo já viesse com 57 colunas expandidas, trocar de codificação exigiria reexportar tudo.
 
 ### Agora a normalização precisa ser medida
 
@@ -475,25 +497,32 @@ Se o `min`/`max` saísse do dataset inteiro, o maior empréstimo do conjunto de 
 
 É exatamente a dívida que o aviso lá de [Features de entrada](#-features-de-entrada) tinha registrado — e que só o dataset real obrigou a pagar.
 
-### Uma fonte, dois datasets
+### Uma fonte, três datasets
 
 Trocar de dataset não exigiu tocar em treino, matriz de confusão, ROC ou escolha de limiar. Tudo que muda de um para o outro ficou em um objeto:
 
 ```javascript
-const GERMAN_SOURCE = {
-  id: 'german',
+const createGermanSource = ({ id, label, encoding }) => ({
+  id,
+  label,
+  encoding,
   csvPath: GERMAN_CSV_PATH,
-  featureNames: GERMAN_FEATURES,
+  featureNames: germanFeatureNames(encoding),
 
   ensure: (filePath = GERMAN_CSV_PATH) => { /* confere que o arquivo existe */ },
   read: () => readCustomersCsv(GERMAN_CSV_PATH),
 
-  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_FEATURES),
-  toVector: (customer, scaler) => applyMinMaxScaler(scaler, customer),
+  // Só as numéricas passam pelo min-max: escalar um código de
+  // categoria seria escalar um rótulo.
+  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_NUMERIC),
+  toVector: (customer, scaler) => toGermanVector(customer, scaler, encoding),
 
+  audit: auditByGroup,
   sampleCustomer: { /* cliente de exemplo para a inferência */ },
-};
+});
 ```
+
+São **três** fontes registradas — `synthetic`, `german` e `german-ordinal` —, e as duas do German Credit saem da mesma fábrica, diferindo só no `encoding`.
 
 A fonte sintética cumpre o mesmo contrato, com uma diferença que vale ler:
 
@@ -507,7 +536,7 @@ A fonte sintética cumpre o mesmo contrato, com uma diferença que vale ler:
 E a única parte da rede que precisou saber qual dataset está em uso foi o tamanho da entrada:
 
 ```javascript
-const model = buildModel(source.featureNames.length);   // 4 ou 8
+const model = buildModel(source.featureNames.length);   // 4, 19 ou 57
 ```
 
 ### O resultado — e por que ele é a melhor parte
@@ -547,17 +576,92 @@ Descer o corte de `0.5` para `0.1669` derruba os falsos negativos de **33 para 6
 
 > 💡 Os custos `1` e `5` não são invenção deste projeto: são a **matriz de custo oficial do dataset**, publicada junto com ele. A UCI documenta que classificar um mau pagador como bom custa 5 vezes mais que o contrário. A `chooseThresholdByCost`, escrita antes de o dataset real entrar no projeto, já estava calibrada para ele.
 
+### One-hot melhorou o modelo? Não.
+
+A justificativa acima é de **correção**, não de desempenho. Vale medir a diferença em vez de supor — 15 sementes, mesma arquitetura, mudando só a codificação e o conjunto de colunas:
+
+| Variante | Entradas | Parâmetros | AUC | Custo mínimo |
+| -------- | -------: | ---------: | --: | -----------: |
+| ordinal, 8 colunas (versão anterior) | 8 | 289 | `0.7793` ± 0.0057 | `101.4` ± 2.2 |
+| ordinal, 19 colunas | 19 | 465 | `0.7784` ± 0.0056 | `101.9` ± 2.3 |
+| **one-hot, 19 colunas** (atual) | **57** | **1.073** | `0.7776` ± 0.0070 | `99.9` ± 2.6 |
+| one-hot + L2 e dropout | 57 | 1.073 | `0.7812` ± 0.0063 | `97.2` ± 2.7 |
+
+*(média ± erro padrão sobre 15 sementes de embaralhamento)*
+
+**Todas as diferenças cabem dentro de um erro padrão.** Nem a codificação correta, nem 11 colunas a mais, nem as duas juntas moveram a AUC de forma distinguível de ruído.
+
+Três leituras disso, todas úteis:
+
+1. **A codificação não era o gargalo.** A AUC de ~`0.78` é aproximadamente o teto publicado para o German Credit — a literatura reporta `0.76`–`0.80` para praticamente qualquer método, de regressão logística a *gradient boosting*. O limite está no sinal disponível nos dados, não em como as colunas são representadas.
+
+2. **Mais features com o mesmo dado não é ganho automático.** O modelo saltou de 289 para 1.073 parâmetros treinando com as mesmas 640 linhas efetivas. A capacidade extra foi para decorar, não para generalizar — e é exatamente isso que a linha com L2 e dropout começa a corrigir (nominalmente a melhor das quatro, ainda dentro do ruído). Motivo direto para o próximo item da lista.
+
+3. **Correção e desempenho são eixos separados.** One-hot continua sendo a representação certa para `purpose`, mesmo sem mexer no número. Afirmar uma ordem que não existe é errado independentemente de a métrica notar.
+
+> 🔬 Para reproduzir a comparação: `npm start` roda one-hot e `npm run start:ordinal` roda a codificação anterior sobre as mesmas 19 colunas. A variante ordinal existe no código **só para isso** — para que a frase "one-hot é melhor" possa ser medida em vez de repetida.
+
+### A coluna que o modelo não recebeu
+
+O atributo 9 é estado civil **e sexo**: `A91` homem divorciado, `A92` mulher, `A93` homem solteiro, `A94` homem casado/viúvo. Dá para recuperar o sexo dele — `A92` é o único código feminino que aparece nos 1.000 registros.
+
+Ele nunca entrou no modelo, e continua fora. Mas tirar a coluna resolve o problema?
+
+```text
+Auditoria por sexo (o modelo nunca recebeu esta coluna):
+Grupo    |   N | Inadimp. real | Marcados ALTO | FN não pegos
+---------+-----+---------------+---------------+-------------
+Mulheres |  64 |         28.1% |         65.6% |        11.1%
+Homens   | 136 |         28.7% |         59.6% |        12.8%
+
+Razão de aprovação (regra dos 4/5): 0.850
+```
+
+**Não resolve.** O modelo marca mulheres como alto risco com mais frequência que homens, sem nunca ter visto a coluna. Ele reconstrói o sinal por tabela: idade, moradia, tempo de emprego e valor do crédito carregam a informação, e a rede a recompõe sozinha.
+
+É o resultado clássico de que *fairness through unawareness* não funciona — remover o atributo protegido não remove a disparidade, só a torna mais difícil de enxergar. Por isso a coluna fica no CSV: para medir depois, não para decidir antes.
+
+#### Um número só não basta
+
+O `N` das mulheres no hold-out é 64, e os pesos iniciais são aleatórios — essa razão balança bastante entre execuções. Agregando 15 sementes:
+
+| | Mulheres | Homens |
+| --- | ---: | ---: |
+| N acumulado | 894 | 2.106 |
+| Inadimplência **real** | 33,6% | 26,7% |
+| Marcados ALTO pelo modelo | 65,2% | 55,9% |
+
+**Razão de aprovação: `0.791` ± 0.039** — abaixo de `0.80` em 6 das 15 execuções.
+
+E aqui é preciso ser honesto sobre o que o número diz e o que não diz. As mulheres do dataset **de fato** têm taxa de inadimplência maior (33,6% contra 26,7%). A razão entre as taxas-base é `1.26`; a razão entre as taxas de marcação é `1.17`. Ou seja: **o modelo é menos desigual que os próprios dados** — ele atenua a diferença, não a amplifica.
+
+Então há discriminação? Depende do critério, e é isso que torna o caso interessante:
+
+- **Paridade demográfica** (mesma taxa de aprovação nos dois grupos) → falha: `0.791` fica no limite dos `0.80`.
+- **Calibração / odds equalizadas** (mesma precisão e mesmo recall nos dois grupos) → passa razoavelmente: os FNR ficam próximos.
+
+Os dois critérios são incompatíveis entre si quando as taxas-base diferem — é um resultado provado, não uma limitação deste projeto. Escolher qual vale é uma decisão de política, não de engenharia.
+
+O que o laboratório entrega é a **medição**. Quem decide o que fazer com ela precisa de mais contexto do que um `README` tem: por que as taxas-base diferem (o dataset é de 1994, quando crédito para mulheres casadas dependia de autorização do marido na Alemanha), se a diferença é causal ou reflexo de discriminação histórica já embutida nos rótulos, e o que a lei aplicável exige.
+
+> ⚠️ Um modelo treinado em rótulos históricos aprende as decisões do passado, inclusive as injustas. Se em 1994 mulheres recebiam menos crédito e por isso apareciam mais como inadimplentes, o rótulo já vem contaminado — e nenhuma escolha de features conserta um rótulo enviesado.
+
 ### Comparação lado a lado
+
+Números de uma execução só oscilam bastante — a acurácia do dataset real já apareceu entre `0.69` e `0.76` entre rodadas. A tabela abaixo é a **média de 15 sementes**, com erro padrão:
 
 | Métrica | Sintético | German Credit |
 | ------- | --------: | ------------: |
-| Baseline (classe majoritária) | `0.5375` | `0.7150` |
-| Test accuracy | `0.9875` | `0.7500` |
-| **Ganho sobre o baseline** | **+45,0 pts** | **+3,5 pts** |
-| AUC | `0.9997` | `0.7497` |
-| Recall no limiar `0.5` | `1.0000` | `0.4211` |
-| Custo no limiar `0.5` | `3` | `182` |
-| Custo no limiar escolhido | `1` | `105` |
+| Entradas da rede | 4 | 57 |
+| Baseline (classe majoritária) | `0.5561` ± 0.0054 | `0.7123` ± 0.0062 |
+| Test accuracy | `0.9856` ± 0.0021 | `0.7520` ± 0.0067 |
+| **Ganho sobre o baseline** | **+43 pts** | **+4 pts** |
+| AUC | `0.9995` ± 0.0001 | `0.7759` ± 0.0057 |
+| Recall no limiar `0.5` | `0.9909` ± 0.0037 | `0.4820` ± 0.0138 |
+| Custo no limiar `0.5` | `8.3` ± 2.3 | `168.8` ± 5.1 |
+| Custo no limiar escolhido | `2.7` ± 0.7 | `99.3` ± 2.3 |
+
+Duas linhas resumem a diferença entre um laboratório e um problema real. O **ganho sobre o baseline** cai de 43 para 4 pontos. E o **recall no limiar `0.5`** cai de `0.99` para `0.48`: o corte herdado, que no sintético pegava praticamente todos os inadimplentes, no dataset real deixa passar mais da metade. Escolher o limiar deixa de ser refinamento — corta o custo pela metade (`168.8` → `99.3`).
 
 O dataset sintético não estava errado — ele estava **fácil**. A regra existia, era determinística e cabia em quatro features. O German Credit é a lembrança de que, em dados reais, o teto raramente é o modelo: é o quanto de sinal existe nos dados.
 
@@ -595,8 +699,8 @@ Uma **MLP** com duas camadas ocultas:
 
 ```mermaid
 flowchart LR
-    I(["Entrada<br/>8 features (real)<br/>4 (sintético)"])
-    H1["Dense 16 · ReLU<br/>144 parâmetros"]
+    I(["Entrada<br/>57 features (real)<br/>4 (sintético)"])
+    H1["Dense 16 · ReLU<br/>928 parâmetros"]
     H2["Dense 8 · ReLU<br/>136 parâmetros"]
     O["Dense 1 · Sigmoid<br/>9 parâmetros"]
     P(["Probabilidade<br/>0 a 1"])
@@ -615,7 +719,9 @@ flowchart LR
     class O out
 ```
 
-Total: **289 parâmetros treináveis** no dataset real (**225** no sintético, que tem 4 features) — é o que o `model.summary()` imprime ao rodar.
+Total: **1.073 parâmetros treináveis** no dataset real com one-hot (**465** na variante ordinal, **225** no sintético) — é o que o `model.summary()` imprime ao rodar.
+
+> ⚠️ São 1.073 parâmetros para **640 linhas** de treino efetivo. Essa razão é desconfortável e aparece na [medição](#one-hot-melhorou-o-modelo-não): a capacidade extra vai para decorar, não para generalizar. É o argumento mais concreto a favor do próximo item da lista — regularização.
 
 A largura da entrada é o **único** ponto da rede que depende do dataset:
 
@@ -644,7 +750,7 @@ const buildModel = (inputSize = 4) => {
 | **16 → 8**    | Funil: capacidade suficiente para o padrão, pequena o bastante para não decorar o dataset  |
 
 ```javascript
-const model = buildModel(source.featureNames.length);   // 4 ou 8
+const model = buildModel(source.featureNames.length);   // 4, 19 ou 57
 ```
 
 O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução.
@@ -1168,14 +1274,23 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `loadDatasetCsv` | função async | CSV → `{ features, labels }` normalizados |
 | `splitDataset` | função | Divide features já normalizadas em treino e teste |
 | `GERMAN_CSV_PATH`, `GERMAN_SOURCE_URL` | constantes | Arquivo local e endereço na UCI do dataset real |
-| `GERMAN_CODES`, `GERMAN_FEATURES`, `GERMAN_COLUMNS`, `GERMAN_PRECISION` | constantes | Códigos qualitativos, as 8 features e o esquema do CSV |
+| `GERMAN_NUMERIC`, `GERMAN_CATEGORICAL` | constantes | As 7 colunas com magnitude e as 12 qualitativas com seus códigos |
+| `GERMAN_AUDIT_COLUMN`, `GERMAN_AUDIT_CODES`, `FEMALE_CODE` | constantes | Atributo 9: fora do modelo, dentro da auditoria |
+| `GERMAN_SOURCE_ATTRIBUTES` | constante | De que `AttributeN` do arquivo vem cada coluna |
+| `GERMAN_COLUMNS`, `GERMAN_PRECISION` | constantes | As 21 colunas do CSV e sua precisão |
+| `oneHotEncode`, `ordinalEncode` | funções | Índice de categoria → vetor de features |
+| `germanFeatureNames` | função | Nome de cada posição do vetor, por codificação |
+| `toGermanVector` | função | Cliente → numéricas escaladas + qualitativas codificadas |
+| `isFemale`, `summarizeGroup`, `approvalRatio`, `auditByGroup` | funções | Auditoria de disparidade por grupo |
+| `formatAudit` | função | Auditoria → tabela para o terminal |
+| `createGermanSource` | função | Fábrica das duas variantes do dataset real |
 | `parseDelimited` | função | Texto CSV → lista de objetos (parser mínimo) |
 | `toOrdinal` | função | Código `'A11'` → posição na lista documentada; lança se desconhecido |
 | `toGermanCustomer` | função | Linha da UCI → cliente no vocabulário do projeto |
 | `parseGermanCsv` | função | Texto bruto da UCI → clientes prontos |
 | `fitMinMaxScaler` | função | Clientes de treino → `{ featureNames, min, range }` |
 | `applyMinMaxScaler` | função | Scaler + cliente → vetor normalizado |
-| `SYNTHETIC_SOURCE`, `GERMAN_SOURCE`, `SOURCES` | objetos | As duas fontes de dados e o registro delas |
+| `SYNTHETIC_SOURCE`, `GERMAN_SOURCE`, `GERMAN_ORDINAL_SOURCE`, `SOURCES` | objetos | As três fontes de dados e o registro delas |
 | `DEFAULT_SOURCE_ID`, `resolveSourceId` | constante / função | Fonte padrão e leitura de `--source=` |
 | `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
 | `splitCustomers` | função | Divide clientes **brutos** em treino e teste |
@@ -1205,26 +1320,26 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 ## 📤 Exemplo de saída
 
 ```text
-Fonte: German Credit — UCI/Statlog (Hofmann, 1994)
+Fonte: German Credit — UCI/Statlog (Hofmann, 1994), one-hot
 Arquivo: /caminho/do/projeto/data/german-credit.csv
 Clientes lidos: 1000
-Features: checkingStatus, durationMonths, creditHistory, creditAmount, savingsStatus, employmentYears, installmentRate, age
+Features: durationMonths, creditAmount, installmentRate, ..., foreignWorker=A201, foreignWorker=A202
 
-Total params: 289
+Total params: 1073
 
-Test loss: 0.5175
-Test accuracy: 0.7500
+Test loss: 0.5230
+Test accuracy: 0.7400
 Baseline (classe majoritária): 0.7150
 
 Matriz de confusão (limiar 0.5):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      126 (TN) |      17 (FP)
-Real ALTO  |       33 (FN) |      24 (TP)
+Real BAIXO |      121 (TN) |      22 (FP)
+Real ALTO  |       30 (FN) |      27 (TP)
 
-Precision: 0.5854 - dos marcados como ALTO RISCO, quantos eram
-Recall:    0.4211 - dos que eram ALTO RISCO, quantos foram pegos
-F1-score:  0.4898 - média harmônica entre precision e recall
+Precision: 0.5510 - dos marcados como ALTO RISCO, quantos eram
+Recall:    0.4737 - dos que eram ALTO RISCO, quantos foram pegos
+F1-score:  0.5094 - média harmônica entre precision e recall
 
 Curva ROC (O = limiar 0.5, . = aleatório):
     TPR
@@ -1242,27 +1357,35 @@ Curva ROC (O = limiar 0.5, . = aleatório):
     |**..                                    |
 0.0 +----------------------------------------+
     0.0                               FPR 1.0
-AUC: 0.7497
+AUC: 0.7501
 
 Ajuste do limiar (FP custa 1, FN custa 5):
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
-Padrão (0.5)   | 0.5000 | 0.1189 | 0.4211 | 17 | 33 |   182
-Youden (max J) | 0.2708 | 0.3147 | 0.7368 | 45 | 15 |   120
-Menor custo    | 0.1669 | 0.5245 | 0.8947 | 75 |  6 |   105
+Padrão (0.5)   | 0.5000 | 0.1538 | 0.4737 | 22 | 30 |   172
+Youden (max J) | 0.2798 | 0.3427 | 0.7544 | 49 | 14 |   119
+Menor custo    | 0.1655 | 0.5035 | 0.8947 | 72 |  6 |   102
 
-Matriz no limiar escolhido (0.1669):
+Matriz no limiar escolhido (0.1655):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |       68 (TN) |      75 (FP)
+Real BAIXO |       71 (TN) |      72 (FP)
 Real ALTO  |        6 (FN) |      51 (TP)
 
-Probabilidade de alto risco: 0.8184
+Auditoria por sexo (o modelo nunca recebeu esta coluna):
+Grupo    |   N | Inadimp. real | Marcados ALTO | FN não pegos
+---------+-----+---------------+---------------+-------------
+Mulheres |  64 |         28.1% |         65.6% |        11.1%
+Homens   | 136 |         28.7% |         59.6% |        12.8%
+
+Razão de aprovação (regra dos 4/5): 0.850
+
+Probabilidade de alto risco: 0.9503
 Classificação: ALTO RISCO
 Modelo salvo em: /caminho/do/projeto/model
-Modelo recarregado — test loss: 0.5175
-Modelo recarregado — test accuracy: 0.7500
-Modelo recarregado — probabilidade: 0.8184
+Modelo recarregado — test loss: 0.5230
+Modelo recarregado — test accuracy: 0.7400
+Modelo recarregado — probabilidade: 0.9503
 Mesma predição do modelo original? sim
 ```
 
@@ -1280,7 +1403,8 @@ Os valores exatos não importam. O que se observa é o **comportamento**:
 E duas coisas que **só aparecem no dataset real**, e que são o motivo de ele estar aqui:
 
 - ⚠️ a acurácia (`0.7500`) mal supera o baseline da classe majoritária (`0.7150`) → **acurácia sozinha não diz se o modelo presta**;
-- ⚠️ precision (`0.5854`) e recall (`0.4211`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade.
+- ⚠️ precision (`0.5510`) e recall (`0.4737`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade;
+- ⚠️ a razão de aprovação entre os grupos fica perto de `0.80` → o modelo trata mulheres e homens de forma diferente [sem nunca ter recebido a coluna de sexo](#a-coluna-que-o-modelo-não-recebeu).
 
 No dataset sintético, os mesmos números ficam em `0.9875` de acurácia contra `0.5375` de baseline, com AUC `0.9997` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real.
 
@@ -1324,9 +1448,11 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 
 | Simplificação                                                  | Por que importaria em produção                              |
 | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| Categorias codificadas como **ordinais**, não *one-hot*          | Impõe uma ordem que os dados nem sempre têm — `savingsStatus` mistura magnitude com "desconhecido", e `creditHistory` [inverte](#a-ordem-que-os-dados-nem-sempre-têm) |
-| 8 das 20 colunas do German Credit                                | As 12 restantes são categóricas sem ordem natural; usá-las exige *one-hot* |
-| Dataset real com apenas **1.000 linhas**                         | Pouco dado para uma rede neural — parte da variação entre execuções vem daí, e é o que motiva regularização |
+| **1.073 parâmetros para 640 linhas** de treino efetivo           | Capacidade muito acima do dado disponível; a [medição](#one-hot-melhorou-o-modelo-não) mostra o custo, e regularização é a correção |
+| Dataset real com apenas **1.000 linhas**                         | Pouco dado para uma rede neural — boa parte da variação entre execuções vem daí |
+| Todos os níveis one-hot mantidos (*dummy variable trap*)         | Inofensivo em rede neural, quebraria uma regressão linear |
+| `savingsStatus` trata "desconhecido" como mais um nível          | Ausência de dado não é uma categoria como as outras; o certo seria um indicador de faltante separado |
+| Disparidade **medida**, não corrigida                            | O projeto audita e reporta; mitigar (reponderação, restrição de paridade, limiar por grupo) é outro problema, com trade-offs próprios |
 | CSV sem validação de esquema, faixas ou valores ausentes        | Dado real vem com coluna faltando, texto onde deveria haver número e `NaN` |
 | Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado |
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
@@ -1340,6 +1466,8 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ------------- | -------------- |
 | ~~Normalização com constantes fixas em vez de estatísticas do treino~~ | `fitMinMaxScaler`, [medido só no treino](#agora-a-normalização-precisa-ser-medida) |
 | ~~Split por fatiamento sem embaralhar antes~~ | `shuffle` com [semente fixa](#reprodutibilidade) antes do corte |
+| ~~Categorias codificadas como ordinais~~ | [One-hot](#por-que-one-hot-e-não-ordinal) nas 12 qualitativas |
+| ~~8 das 20 colunas aproveitadas~~ | 19 colunas; a vigésima é [auditoria, não feature](#a-coluna-que-o-modelo-não-recebeu) |
 
 ---
 
@@ -1354,9 +1482,10 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 **Modelo e dados**
 - [x] ~~carregar dados de um CSV~~ — feito, veja [Carregando dados de um CSV](#-carregando-dados-de-um-csv);
 - [x] ~~usar um dataset real de crédito~~ — feito, veja [Dataset real: German Credit](#-dataset-real-german-credit);
-- [ ] codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as 12 colunas restantes;
+- [x] ~~codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as colunas restantes~~ — feito, veja [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal);
 - [ ] adicionar ruído e desbalanceamento aos dados sintéticos;
-- [ ] regularização L2 e dropout;
+- [ ] **regularização L2 e dropout** — a [medição](#one-hot-melhorou-o-modelo-não) mostra que é o próximo passo natural;
+- [ ] mitigar a disparidade medida, não só reportá-la;
 - [ ] validação cruzada e split estratificado;
 - [ ] comparar arquiteturas diferentes.
 
@@ -1410,7 +1539,7 @@ Com o dataset real isso ficou mais concreto: a escala não é mais um punhado de
 
 ## 📚 Conceitos demonstrados
 
-`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Fairness` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
+`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `One-hot encoding` · `Dummy variable trap` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Fairness` · `Disparate impact` · `Regra dos quatro quintos` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
 
 ---
 
@@ -1419,6 +1548,8 @@ Com o dataset real isso ficou mais concreto: a escala não é mais um punhado de
 Projeto criado para **estudo de redes neurais e TensorFlow.js**. O modelo **não deve ser usado para decisões financeiras reais**.
 
 O dataset real é de **1994**, tem 1.000 registros de um único banco alemão e reflete as práticas de concessão daquele contexto — inclusive as discriminatórias. Ele serve para estudar o método, não para tirar conclusões sobre crédito hoje.
+
+A [auditoria por sexo](#a-coluna-que-o-modelo-não-recebeu) incluída aqui é uma demonstração didática de uma técnica, não um parecer. Avaliar viés em um sistema de crédito real exige análise causal, contexto jurídico e revisão humana — nada disso cabe em um `README`.
 
 Modelos de crédito em produção exigem, entre outros pontos: dados representativos, validação estatística, análise de viés, explicabilidade, governança, monitoramento contínuo, segurança e conformidade regulatória.
 
@@ -1431,6 +1562,7 @@ Modelos de crédito em produção exigem, entre outros pontos: dados representat
 - [TensorFlow.js — Documentação](https://www.tensorflow.org/js)
 - [`@tensorflow/tfjs-node`](https://www.npmjs.com/package/@tensorflow/tfjs-node)
 - Hofmann, H. (1994). **Statlog (German Credit Data)**. UCI Machine Learning Repository. [DOI: 10.24432/C5NC77](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data) — CC BY 4.0
+- Barocas, S., Hardt, M., Narayanan, A. — [*Fairness and Machine Learning*](https://fairmlbook.org/) (sobre por que os critérios de justiça são incompatíveis entre si quando as taxas-base diferem)
 
 ---
 

@@ -53,41 +53,70 @@ const CSV_PRECISION = {
 // dataset sintético: aqui ninguém escolheu a regra que separa bom de mau
 // pagador — ela precisa ser descoberta, e boa parte dela simplesmente
 // não está nas colunas.
+
 const GERMAN_CSV_PATH = path.join(__dirname, 'data', 'german-credit.csv');
 const GERMAN_SOURCE_URL = 'https://archive.ics.uci.edu/static/public/144/data.csv';
 
-// Códigos qualitativos do arquivo original, na ordem documentada pela
-// UCI. A posição na lista vira o valor numérico (codificação ORDINAL).
-const GERMAN_CODES = {
-  checkingStatus: ['A11', 'A12', 'A13', 'A14'],
-  creditHistory: ['A30', 'A31', 'A32', 'A33', 'A34'],
-  savingsStatus: ['A61', 'A62', 'A63', 'A64', 'A65'],
-  employmentYears: ['A71', 'A72', 'A73', 'A74', 'A75'],
-};
-
-// 8 das 20 colunas originais. O recorte fica com o que tem ordem natural,
-// porque codificar como ordinal só faz sentido quando existe um "mais" e
-// um "menos" — as demais precisariam de one-hot para não inventar ordem.
-//
-// Fica DE FORA de propósito o atributo 9 (estado civil e SEXO). Usar sexo
-// para negar crédito é discriminação, ilegal em vários países, e é um dos
-// motivos pelos quais este dataset virou caso clássico da literatura de
-// fairness. A coluna existe no arquivo; não entra no modelo.
-const GERMAN_FEATURES = [
-  'checkingStatus',
+// Colunas com magnitude de verdade: um valor maior significa "mais".
+// Só estas passam pelo min-max — as outras não têm o que escalar.
+const GERMAN_NUMERIC = [
   'durationMonths',
-  'creditHistory',
   'creditAmount',
-  'savingsStatus',
-  'employmentYears',
   'installmentRate',
+  'residenceSince',
   'age',
+  'existingCredits',
+  'dependents',
 ];
 
-const GERMAN_COLUMNS = [...GERMAN_FEATURES, CSV_LABEL_COLUMN];
+// Colunas qualitativas, com os códigos na ordem documentada pela UCI.
+//
+// ATENÇÃO ao que o inteiro significa daqui em diante: ele é um CÓDIGO,
+// não uma quantidade. `purpose = 3` não é o triplo de `purpose = 1`; são
+// "rádio/TV" e "carro usado". É exatamente por isso que estas colunas
+// viram one-hot antes de entrar na rede.
+const GERMAN_CATEGORICAL = {
+  checkingStatus: ['A11', 'A12', 'A13', 'A14'],
+  creditHistory: ['A30', 'A31', 'A32', 'A33', 'A34'],
+  purpose: ['A40', 'A41', 'A42', 'A43', 'A44', 'A45', 'A46', 'A48', 'A49', 'A410'],
+  savingsStatus: ['A61', 'A62', 'A63', 'A64', 'A65'],
+  employmentYears: ['A71', 'A72', 'A73', 'A74', 'A75'],
+  otherDebtors: ['A101', 'A102', 'A103'],
+  property: ['A121', 'A122', 'A123', 'A124'],
+  otherInstallments: ['A141', 'A142', 'A143'],
+  housing: ['A151', 'A152', 'A153'],
+  job: ['A171', 'A172', 'A173', 'A174'],
+  telephone: ['A191', 'A192'],
+  foreignWorker: ['A201', 'A202'],
+};
 
-// Todas as colunas convertidas são inteiras: marcos ordinais, contagens,
-// meses, anos e o valor do crédito em marcos alemães.
+// Atributo 9 do arquivo original: estado civil e SEXO.
+//
+// Ele é lido e vai para o CSV, mas NÃO entra no modelo. Usar sexo para
+// negar crédito é discriminação e é ilegal em vários países. A coluna
+// serve a um propósito diferente: AUDITAR as decisões do modelo depois
+// que ele já decidiu sem ela. Veja `auditByGroup`.
+//
+// A95 (mulher solteira) não aparece nos 1000 registros; só A91–A94.
+const GERMAN_AUDIT_COLUMN = 'personalStatus';
+const GERMAN_AUDIT_CODES = ['A91', 'A92', 'A93', 'A94'];
+
+// A92 é o único código feminino presente no arquivo. Os outros três são
+// recortes de estado civil masculino — ou seja, dá para recuperar o sexo
+// desta coluna, e é isso que a auditoria usa.
+const FEMALE_CODE = 'A92';
+
+// Uma linha do CSV: as numéricas, os códigos das qualitativas, a coluna
+// de auditoria e o rótulo. 21 colunas — 19 delas viram features.
+const GERMAN_COLUMNS = [
+  ...GERMAN_NUMERIC,
+  ...Object.keys(GERMAN_CATEGORICAL),
+  GERMAN_AUDIT_COLUMN,
+  CSV_LABEL_COLUMN,
+];
+
+// Todos os valores gravados são inteiros: meses, marcos, contagens,
+// idades e códigos de categoria.
 const GERMAN_PRECISION = Object.fromEntries(
   GERMAN_COLUMNS.map((column) => [column, 0]),
 );
@@ -252,22 +281,61 @@ const toOrdinal = (codes, code) => {
   return index;
 };
 
+
 // Uma linha do arquivo original vira um cliente no vocabulário do
 // laboratório. A coluna `class` vale 1 (bom) ou 2 (mau); nossa convenção
 // é risk = 1 para o ALTO RISCO, ou seja, para o mau pagador.
-const toGermanCustomer = (row) => ({
-  checkingStatus: toOrdinal(GERMAN_CODES.checkingStatus, row.Attribute1),
-  durationMonths: Number(row.Attribute2),
-  creditHistory: toOrdinal(GERMAN_CODES.creditHistory, row.Attribute3),
-  creditAmount: Number(row.Attribute5),
-  savingsStatus: toOrdinal(GERMAN_CODES.savingsStatus, row.Attribute6),
-  employmentYears: toOrdinal(GERMAN_CODES.employmentYears, row.Attribute7),
-  installmentRate: Number(row.Attribute8),
-  age: Number(row.Attribute13),
-  risk: Number(row.class) === 2 ? 1 : 0,
-});
+//
+// As qualitativas viram o ÍNDICE do código, não uma nota: quem transforma
+// isso em features é `toGermanVector`, com one-hot.
+const GERMAN_SOURCE_ATTRIBUTES = {
+  durationMonths: 'Attribute2',
+  creditAmount: 'Attribute5',
+  installmentRate: 'Attribute8',
+  residenceSince: 'Attribute11',
+  age: 'Attribute13',
+  existingCredits: 'Attribute16',
+  dependents: 'Attribute18',
+
+  checkingStatus: 'Attribute1',
+  creditHistory: 'Attribute3',
+  purpose: 'Attribute4',
+  savingsStatus: 'Attribute6',
+  employmentYears: 'Attribute7',
+  otherDebtors: 'Attribute10',
+  property: 'Attribute12',
+  otherInstallments: 'Attribute14',
+  housing: 'Attribute15',
+  job: 'Attribute17',
+  telephone: 'Attribute19',
+  foreignWorker: 'Attribute20',
+
+  [GERMAN_AUDIT_COLUMN]: 'Attribute9',
+};
+
+const toGermanCustomer = (row) => {
+  const customer = {};
+
+  GERMAN_NUMERIC.forEach((field) => {
+    customer[field] = Number(row[GERMAN_SOURCE_ATTRIBUTES[field]]);
+  });
+
+  Object.entries(GERMAN_CATEGORICAL).forEach(([field, codes]) => {
+    customer[field] = toOrdinal(codes, row[GERMAN_SOURCE_ATTRIBUTES[field]]);
+  });
+
+  customer[GERMAN_AUDIT_COLUMN] = toOrdinal(
+    GERMAN_AUDIT_CODES,
+    row[GERMAN_SOURCE_ATTRIBUTES[GERMAN_AUDIT_COLUMN]],
+  );
+
+  customer[CSV_LABEL_COLUMN] = Number(row.class) === 2 ? 1 : 0;
+
+  return customer;
+};
 
 const parseGermanCsv = (text) => parseDelimited(text).map(toGermanCustomer);
+
 
 // --------------------------------------------------
 // 5. Normalização ajustada no treino
@@ -305,7 +373,136 @@ const applyMinMaxScaler = ({ featureNames, min, range }, customer) =>
   featureNames.map((feature) => (customer[feature] - min[feature]) / range[feature]);
 
 // --------------------------------------------------
-// 6. Fontes de dados
+// 6. Codificação das colunas qualitativas
+// --------------------------------------------------
+// Codificar categoria como número inteiro (ordinal) é conveniente e, na
+// maioria das colunas, é uma MENTIRA: diz à rede que `purpose = 3` fica
+// entre `2` e `4`, quando "rádio/TV", "eletrodoméstico" e "reparos" não
+// têm ordem nenhuma entre si.
+//
+// One-hot desfaz essa suposição. Cada categoria vira uma coluna própria,
+// que vale 1 quando é aquela e 0 nas outras — nenhuma fica "maior" que
+// as demais, e a rede aprende um peso independente para cada uma.
+//
+//   purpose = 3  →  ordinal: [0.333]
+//                   one-hot: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+const oneHotEncode = (size, index) =>
+  Array.from({ length: size }, (unused, position) => (position === index ? 1 : 0));
+
+// Codificação ordinal normalizada, mantida para comparação. Divide pelo
+// maior índice para cair em [0, 1], igual às numéricas.
+const ordinalEncode = (size, index) => [size > 1 ? index / (size - 1) : 0];
+
+const ENCODERS = {
+  onehot: oneHotEncode,
+  ordinal: ordinalEncode,
+};
+
+// Nome de cada posição do vetor final. Com 57 entradas, saber qual coluna
+// é qual deixa de ser óbvio — e o nome é o que liga um peso da rede de
+// volta a um fato sobre o cliente.
+const germanFeatureNames = (encoding) => [
+  ...GERMAN_NUMERIC,
+  ...Object.entries(GERMAN_CATEGORICAL).flatMap(([field, codes]) => (
+    encoding === 'onehot'
+      ? codes.map((code) => `${field}=${code}`)
+      : [field]
+  )),
+];
+
+// Numéricas escaladas + qualitativas codificadas, sempre nessa ordem.
+// A ordem precisa ser estável: é ela que casa cada valor com a entrada
+// correspondente da rede, no treino e na inferência.
+const toGermanVector = (customer, scaler, encoding) => {
+  const encode = ENCODERS[encoding];
+
+  return [
+    ...applyMinMaxScaler(scaler, customer),
+    ...Object.entries(GERMAN_CATEGORICAL).flatMap(([field, codes]) =>
+      encode(codes.length, customer[field])),
+  ];
+};
+
+// --------------------------------------------------
+// 7. Auditoria de disparidade
+// --------------------------------------------------
+// O modelo nunca recebe a coluna de sexo. Isso NÃO garante que ele decida
+// igual para os dois grupos: as outras colunas carregam o sinal por
+// tabela, e o modelo o reconstrói sem nunca ver o atributo protegido.
+//
+// Por isso a coluna fica no CSV mesmo fora do modelo — para conferir,
+// depois da decisão tomada, se ela caiu diferente entre os grupos.
+const isFemale = (customer) =>
+  customer[GERMAN_AUDIT_COLUMN] === GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+// Para cada grupo: quantos são, qual a taxa REAL de inadimplência e o que
+// o modelo decidiu. Separar as duas últimas é o ponto — diferença na
+// decisão só é injustiça se não vier de diferença nos dados.
+const summarizeGroup = (rows, threshold) => {
+  const flagged = rows.filter(({ score }) => score >= threshold).length;
+  const positives = rows.filter(({ risk }) => risk === 1);
+  const missed = positives.filter(({ score }) => score < threshold).length;
+
+  return {
+    total: rows.length,
+    baseRate: safeDivide(positives.length, rows.length),
+    flaggedRate: safeDivide(flagged, rows.length),
+    falseNegativeRate: safeDivide(missed, positives.length),
+  };
+};
+
+// Regra dos quatro quintos (EEOC): a razão entre as taxas de APROVAÇÃO dos
+// dois grupos. Abaixo de 0.8 é o patamar que, nos EUA, liga o alerta de
+// impacto desigual. Não é lei brasileira nem prova de discriminação — é um
+// termômetro consagrado, e é assim que entra aqui.
+//
+// Os dois casos degenerados precisam de cuidado. Taxas IGUAIS são paridade,
+// inclusive quando as duas são zero: reprovar todo mundo nos dois grupos é
+// tratamento idêntico, e um `0 / 0` virando 0 acusaria disparidade máxima
+// onde não há nenhuma. Já aprovar em um grupo e em nenhum do outro é
+// disparidade sem limite — daí o `Infinity`, que é literalmente o caso.
+const approvalRatio = (women, men) => {
+  const approvedWomen = 1 - women.flaggedRate;
+  const approvedMen = 1 - men.flaggedRate;
+
+  if (approvedWomen === approvedMen) {
+    return 1;
+  }
+
+  return approvedMen === 0 ? Infinity : approvedWomen / approvedMen;
+};
+
+const auditByGroup = (customers, scores, threshold = DECISION_THRESHOLD) => {
+  const rows = customers.map((customer, index) => ({
+    risk: customer[CSV_LABEL_COLUMN],
+    score: scores[index],
+    female: isFemale(customer),
+  }));
+
+  const women = summarizeGroup(rows.filter(({ female }) => female), threshold);
+  const men = summarizeGroup(rows.filter(({ female }) => !female), threshold);
+
+  return { women, men, approvalRatio: approvalRatio(women, men) };
+};
+
+const formatAudit = ({ women, men, approvalRatio }) => [
+  formatTable(
+    ['Grupo', 'N', 'Inadimp. real', 'Marcados ALTO', 'FN não pegos'],
+    [
+      ['Mulheres', String(women.total), `${(100 * women.baseRate).toFixed(1)}%`,
+        `${(100 * women.flaggedRate).toFixed(1)}%`, `${(100 * women.falseNegativeRate).toFixed(1)}%`],
+      ['Homens', String(men.total), `${(100 * men.baseRate).toFixed(1)}%`,
+        `${(100 * men.flaggedRate).toFixed(1)}%`, `${(100 * men.falseNegativeRate).toFixed(1)}%`],
+    ],
+  ),
+  '',
+  `Razão de aprovação (regra dos 4/5): `
+    + `${Number.isFinite(approvalRatio) ? approvalRatio.toFixed(3) : 'infinita'}`
+    + `${approvalRatio < 0.8 ? '  <- abaixo de 0.80' : ''}`,
+].join('\n');
+
+// --------------------------------------------------
+// 8. Fontes de dados
 // --------------------------------------------------
 // Cada fonte descreve tudo que muda de um dataset para o outro: onde o
 // CSV vive, quais colunas viram features, como normalizar e que cliente
@@ -340,13 +537,17 @@ const SYNTHETIC_SOURCE = {
   },
 };
 
-const GERMAN_SOURCE = {
-  id: 'german',
-  label: 'German Credit — UCI/Statlog (Hofmann, 1994)',
+// As duas variantes do dataset real diferem em UMA coisa: como as colunas
+// qualitativas viram números. Tudo o mais — arquivo, leitura, escala,
+// cliente de exemplo — é idêntico, então a fábrica evita duplicar.
+const createGermanSource = ({ id, label, encoding }) => ({
+  id,
+  label,
+  encoding,
   csvPath: GERMAN_CSV_PATH,
   columns: GERMAN_COLUMNS,
   precision: GERMAN_PRECISION,
-  featureNames: GERMAN_FEATURES,
+  featureNames: germanFeatureNames(encoding),
 
   // Dado real não se "gera": ou já está em disco, ou precisa ser baixado.
   // É a diferença mais concreta entre as duas fontes.
@@ -362,26 +563,63 @@ const GERMAN_SOURCE = {
   },
   read: () => readCustomersCsv(GERMAN_CSV_PATH),
 
-  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_FEATURES),
-  toVector: (customer, scaler) => applyMinMaxScaler(scaler, customer),
+  // Só as numéricas passam pelo min-max: escalar um código de categoria
+  // seria escalar um rótulo.
+  fitScaler: (customers) => fitMinMaxScaler(customers, GERMAN_NUMERIC),
+  toVector: (customer, scaler) => toGermanVector(customer, scaler, encoding),
+
+  // A auditoria só existe nesta fonte, porque só ela tem um atributo
+  // protegido para auditar.
+  audit: auditByGroup,
 
   // Perfil desfavorável em todas as frentes: conta corrente no vermelho,
   // prazo longo, histórico curto, sem poupança e prestação no teto.
   sampleCustomer: {
-    checkingStatus: 0,
     durationMonths: 48,
-    creditHistory: 1,
     creditAmount: 9000,
+    installmentRate: 4,
+    residenceSince: 2,
+    age: 24,
+    existingCredits: 2,
+    dependents: 1,
+
+    checkingStatus: 0,
+    creditHistory: 1,
+    purpose: 0,
     savingsStatus: 0,
     employmentYears: 1,
-    installmentRate: 4,
-    age: 24,
+    otherDebtors: 0,
+    property: 3,
+    otherInstallments: 0,
+    housing: 0,
+    job: 1,
+    telephone: 0,
+    foreignWorker: 0,
+
+    [GERMAN_AUDIT_COLUMN]: 2,
   },
-};
+});
+
+// One-hot é o padrão: é a codificação correta para colunas sem ordem.
+const GERMAN_SOURCE = createGermanSource({
+  id: 'german',
+  label: 'German Credit — UCI/Statlog (Hofmann, 1994), one-hot',
+  encoding: 'onehot',
+});
+
+// A variante ordinal fica disponível para comparação. Ela não está aqui
+// por ser recomendável, e sim para que a afirmação "one-hot é melhor"
+// possa ser MEDIDA em vez de repetida.
+const GERMAN_ORDINAL_SOURCE = createGermanSource({
+  id: 'german-ordinal',
+  label: 'German Credit — UCI/Statlog (Hofmann, 1994), ordinal',
+  encoding: 'ordinal',
+});
 
 const SOURCES = {
   [SYNTHETIC_SOURCE.id]: SYNTHETIC_SOURCE,
   [GERMAN_SOURCE.id]: GERMAN_SOURCE,
+  [GERMAN_ORDINAL_SOURCE.id]: GERMAN_ORDINAL_SOURCE,
 };
 
 // O dataset real é o padrão: é ele que mostra o laboratório sob condições
@@ -403,7 +641,7 @@ const resolveSourceId = (argv = []) => {
 };
 
 // --------------------------------------------------
-// 7. Separar treino e teste
+// 9. Separar treino e teste
 // --------------------------------------------------
 // Gerador pseudoaleatório COM SEMENTE (mulberry32). `Math.random()` não
 // aceita semente: com ele cada execução embaralharia diferente, e aí
@@ -464,7 +702,7 @@ const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
 };
 
 // --------------------------------------------------
-// 8. Criar a MLP
+// 10. Criar a MLP
 // --------------------------------------------------
 // A compilação fica isolada porque é usada em dois momentos:
 // ao montar o modelo do zero e ao recompilar um modelo carregado
@@ -505,7 +743,7 @@ const buildModel = (inputSize = 4) => {
 };
 
 // --------------------------------------------------
-// 9. Persistência
+// 11. Persistência
 // --------------------------------------------------
 // O tfjs-node registra o esquema `file://`. Salvar em `./model`
 // gera dois arquivos:
@@ -532,7 +770,7 @@ const loadModel = async (dir = MODEL_DIR) => {
 };
 
 // --------------------------------------------------
-// 10. Inferência
+// 12. Inferência
 // --------------------------------------------------
 // Encapsula o ciclo tensor → predição → dispose para que nenhum
 // tensor intermediário escape em quem chama.
@@ -549,7 +787,7 @@ const predictRisk = (model, customer, toVector = toFeatureVector) => {
 };
 
 // --------------------------------------------------
-// 11. Matriz de confusão
+// 13. Matriz de confusão
 // --------------------------------------------------
 // A `accuracy` diz quanto o modelo acerta; a matriz diz COMO ele erra.
 // Em risco de crédito os dois erros custam coisas diferentes:
@@ -626,7 +864,7 @@ const formatConfusionMatrix = ({
 );
 
 // --------------------------------------------------
-// 12. Precision, recall e F1-score
+// 14. Precision, recall e F1-score
 // --------------------------------------------------
 // Derivados direto da matriz — nenhuma predição nova é feita.
 // As três respondem a perguntas diferentes sobre a MESMA classe positiva:
@@ -678,7 +916,7 @@ const formatMetrics = (metrics) => {
 };
 
 // --------------------------------------------------
-// 13. Curva ROC e AUC
+// 15. Curva ROC e AUC
 // --------------------------------------------------
 // Matriz, precision e recall descrevem UM limiar. A ROC descreve TODOS:
 // cada ponto é um corte possível, com sua taxa de acerto (TPR) e seu
@@ -815,7 +1053,7 @@ const formatRocCurve = (points, options = {}) => {
 };
 
 // --------------------------------------------------
-// 14. Escolher o limiar a partir da curva
+// 16. Escolher o limiar a partir da curva
 // --------------------------------------------------
 // Até aqui o corte era herdado (`0.5`). Com a curva na mão dá para
 // escolhê-lo — e há duas maneiras, que respondem a perguntas diferentes.
@@ -895,7 +1133,7 @@ const evaluateModel = (model, xTest, yTest) => {
 };
 
 // --------------------------------------------------
-// 15. Treinar, avaliar, salvar, recarregar e prever
+// 17. Treinar, avaliar, salvar, recarregar e prever
 // --------------------------------------------------
 const main = async (sourceId = DEFAULT_SOURCE_ID) => {
   const source = SOURCES[sourceId];
@@ -1024,6 +1262,18 @@ const main = async (sourceId = DEFAULT_SOURCE_ID) => {
   console.log('');
 
   // ------------------------------------------------
+  // Auditoria: a coluna que o modelo NÃO recebeu
+  // ------------------------------------------------
+  if (source.audit) {
+    const scores = tf.tidy(() =>
+      Array.from(model.predict(xTest).reshape([-1]).dataSync()));
+
+    console.log('Auditoria por sexo (o modelo nunca recebeu esta coluna):');
+    console.log(formatAudit(source.audit(testCustomers, scores, chosen.threshold)));
+    console.log('');
+  }
+
+  // ------------------------------------------------
   // Novo cliente
   // ------------------------------------------------
   // O cliente de exemplo vem da fonte: as features de um dataset não
@@ -1097,8 +1347,12 @@ module.exports = {
   CSV_PRECISION,
   GERMAN_CSV_PATH,
   GERMAN_SOURCE_URL,
-  GERMAN_CODES,
-  GERMAN_FEATURES,
+  GERMAN_NUMERIC,
+  GERMAN_CATEGORICAL,
+  GERMAN_AUDIT_COLUMN,
+  GERMAN_AUDIT_CODES,
+  GERMAN_SOURCE_ATTRIBUTES,
+  FEMALE_CODE,
   GERMAN_COLUMNS,
   GERMAN_PRECISION,
   SHUFFLE_SEED,
@@ -1118,8 +1372,19 @@ module.exports = {
   parseGermanCsv,
   fitMinMaxScaler,
   applyMinMaxScaler,
+  oneHotEncode,
+  ordinalEncode,
+  germanFeatureNames,
+  toGermanVector,
+  isFemale,
+  summarizeGroup,
+  approvalRatio,
+  auditByGroup,
+  formatAudit,
+  createGermanSource,
   SYNTHETIC_SOURCE,
   GERMAN_SOURCE,
+  GERMAN_ORDINAL_SOURCE,
   SOURCES,
   DEFAULT_SOURCE_ID,
   resolveSourceId,

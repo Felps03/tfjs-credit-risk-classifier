@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
+    "start:ordinal": "node index.js --source=german-ordinal",
     "start:synthetic": "node index.js --source=synthetic",
     "fetch:german": "node scripts/fetch-german.js",
     "seed": "node -e \"const { writeCustomersCsv, createCustomers, CSV_PATH } = require('./index'); writeCustomersCsv(createCustomers()); console.log('Dataset regerado em:', CSV_PATH);\"",
@@ -29,7 +30,10 @@
     "uci-dataset",
     "nodejs",
     "javascript",
-    "educational"
+    "educational",
+    "one-hot-encoding",
+    "fairness",
+    "algorithmic-bias"
   ],
   "author": {
     "name": "felpsdev03",
