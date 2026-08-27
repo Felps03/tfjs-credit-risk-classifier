@@ -43,10 +43,14 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 - [Solução de problemas](#-solução-de-problemas)
 - [Features de entrada](#-features-de-entrada)
 - [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos)
+  - [Desbalanceamento: o limiar virou um quantil](#desbalanceamento-o-limiar-virou-um-quantil)
+  - [Ruído de medição: um teto que nenhum modelo ultrapassa](#ruído-de-medição-um-teto-que-nenhum-modelo-ultrapassa)
+  - [O que cada botão fez com as métricas](#o-que-cada-botão-fez-com-as-métricas)
 - [Carregando dados de um CSV](#-carregando-dados-de-um-csv)
 - [Dataset real: German Credit](#-dataset-real-german-credit)
   - [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal)
   - [A coluna que o modelo não recebeu](#a-coluna-que-o-modelo-não-recebeu)
+  - [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset)
 - [Arquitetura da rede](#-arquitetura-da-rede)
 - [Treinamento](#-treinamento)
 - [Divisão dos dados](#-divisão-dos-dados)
@@ -68,7 +72,7 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 
 Treinar uma rede neural capaz de estimar a probabilidade de um cliente ser de **alto risco** de inadimplência.
 
-A rede recebe as características financeiras do cliente — **8** no dataset real, **4** no sintético — e devolve **um único número entre `0` e `1`**:
+A rede recebe as características financeiras do cliente — **57** no dataset real, **4** no sintético — e devolve **um único número entre `0` e `1`**:
 
 | Saída da rede | Interpretação          | Classificação |
 | ------------: | ---------------------- | ------------- |
@@ -113,10 +117,10 @@ npm start
 npm start                # dataset real (German Credit) — padrão
 npm run start:synthetic  # dataset sintético gerado pelo projeto
 npm run fetch:german     # rebaixa o dataset real da UCI e reconverte
-npm run seed             # regenera o dataset sintético com dados novos
+npm run seed             # regenera o dataset sintético a partir do código
 ```
 
-Os dados **não** mudam entre execuções: o real é fixo e o sintético é embaralhado com semente fixa. Os pesos iniciais da rede continuam aleatórios, então as métricas oscilam um pouco a cada rodada — isso é esperado.
+Os dados **não** mudam entre execuções, e agora nem entre máquinas: o CSV real é fixo, e o sintético é gerado por um [PRNG com semente](#-geração-dos-dados-sintéticos) — `npm run seed` reproduz o arquivo versionado byte a byte. Os pesos iniciais da rede continuam aleatórios, então as métricas oscilam um pouco a cada rodada; é esperado, e é por isso que os números deste README são **médias de 15 execuções** com erro padrão.
 
 ### Estrutura
 
@@ -124,7 +128,8 @@ Os dados **não** mudam entre execuções: o real é fixo e o sintético é emba
 tfjs-credit-risk-classifier/
 ├── index.js               # fontes de dados, modelo, treino, avaliação, persistência e predição
 ├── scripts/
-│   └── fetch-german.js    # baixa o German Credit da UCI e converte
+│   ├── fetch-german.js    # baixa o German Credit da UCI e converte
+│   └── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
 ├── test/
 │   └── index.test.js      # testes com o runner nativo do Node
 ├── package.json
@@ -133,7 +138,7 @@ tfjs-credit-risk-classifier/
 ├── .gitignore
 ├── data/
 │   ├── german-credit.csv  # dataset REAL (UCI/Statlog), convertido e versionado
-│   └── customers.csv      # dataset sintético versionado, em unidades brutas
+│   └── customers.csv      # dataset sintético versionado, reproduzível pela semente
 ├── model/                 # gerado por `npm start` — ignorado pelo git
 │   ├── model.json         # topologia + training config
 │   └── weights.bin        # pesos e estado do otimizador
@@ -171,7 +176,15 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede:
 | `toFeatureVector`      | Vetor esperado, largura 4 e determinismo (proteção contra *skew*)             |
 | `classify`             | Comportamento no limiar `0.5`, inclusive logo abaixo dele                     |
 | `createDataset`        | Tamanho, features dentro de `[0, 1]`, rótulos binários, ambas as classes presentes |
-| `createCustomers` / `toDataset` | Unidades brutas dentro das faixas, rótulos binários e equivalência com `createDataset` |
+| `createCustomers` / `toDataset` | Unidades brutas dentro das faixas, rótulos binários, equivalência com `createDataset` e **mesma semente → mesmos clientes** |
+| `createGaussian`       | Média `≈ 0` e desvio `≈ 1` em 20 mil sorteios, simetria em torno de zero, reprodutibilidade e `log(0)` que não vira infinito |
+| `clamp` / `quantile`   | Limites, ordenação interna, **entrada não modificada** e o corte no percentil 85 produzindo 15% acima |
+| `riskScore`            | Monotonicidade em dívida e renda (o único coeficiente negativo) e determinismo |
+| `measureCustomer`      | Ruído zero → identidade, nada fora dos limites válidos nem com ruído enorme, atrasos ainda inteiros e nenhuma coluna extra vazando |
+| Desbalanceamento       | A taxa pedida é entregue em `0.05`, `0.25` e `0.5`, e o baseline do dataset padrão passa de `0.8` |
+| Ruído de rótulo        | Sem ruído a regra reproduz o rótulo exatamente, `0.05` troca ~5% e `1.0` inverte **todos** |
+| Teto imposto pelo ruído | Com ruído, a **própria regra geradora** erra ao ver só a medida (`< 100%`); sem ruído acerta tudo |
+| `data/customers.csv`   | O arquivo versionado é **idêntico** ao que o gerador produz, e a minoria fica entre 10% e 20% |
 | `toCsv`                | Cabeçalho, contagem de linhas e precisão por coluna (inteiros saem inteiros)   |
 | `writeCustomersCsv` / `readCustomersCsv` | Criação da pasta, ida e volta dos valores, parse numérico, colunas fora de ordem e arquivo inexistente |
 | `ensureCsv`            | Cria quando falta, **não altera** quando já existe, e sobrescreve só na chamada explícita |
@@ -278,19 +291,155 @@ As features acima descrevem o dataset sintético. O dataset real tem [as suas pr
 
 ## 🧪 Geração dos dados sintéticos
 
-O projeto cria automaticamente **1.200 clientes** com características aleatórias. Para cada um, uma regra determinística define o rótulo:
+O projeto cria **1.200 clientes** com características aleatórias, e uma regra determinística define o rótulo de cada um. Só que gerar dados *perfeitos* ensina pouco: um dataset limpo e equilibrado faz qualquer modelo parecer excelente e esconde justamente os dois problemas que aparecem em quase todo projeto real.
+
+Então o gerador cria os dois de propósito, cada um com um botão próprio:
+
+| Parâmetro | Padrão | O que simula |
+| --------- | -----: | ------------ |
+| `positiveRate` | `0.15` | **Desbalanceamento** — inadimplente é minoria |
+| `featureNoise` | `0.05` | **Ruído de medição** — o dado observado não é o dado real |
+| `labelNoise` | `0.02` | **Ruído de rótulo** — o desfecho registrado está errado |
+
+São argumentos, não constantes escondidas. Dá para desligar um de cada vez e ver o efeito isolado — é exatamente o que a [tabela do 2×2](#o-que-cada-botão-fez-com-as-métricas) mais abaixo faz.
+
+### A verdade que ninguém observa
+
+A mudança estrutural está aqui: o gerador passou a distinguir **o cliente verdadeiro** do **cliente medido**.
 
 ```javascript
-const riskScore =
-  1.4 * debtRatio +
-  1.2 * latePaymentsNormalized +
-  1.0 * creditUtilization -
-  0.8 * incomeNormalized;
+// 1. O estado VERDADEIRO do cliente. No mundo real ele existe e ninguém
+//    o enxerga; aqui ele existe, é usado para rotular, e é descartado.
+const truths = Array.from({ length: total }, () => ({
+  income: INCOME_MIN + random() * INCOME_RANGE,
+  debtRatio: random(),
+  latePayments: Math.floor(random() * (MAX_LATE_PAYMENTS + 1)),
+  creditUtilization: random(),
+}));
 
-const highRisk = riskScore > RISK_RULE_THRESHOLD ? 1 : 0;  // 1.35 · 0 = baixo, 1 = alto
+// 2. O corte que produz a taxa de inadimplência pedida.
+const scores = truths.map(riskScore);
+const cut = quantile(scores, 1 - positiveRate);
+
+// 3. O que vai para o arquivo é a MEDIDA e o desfecho REGISTRADO.
+return truths.map((truth, index) => {
+  const label = scores[index] > cut ? 1 : 0;
+  const mistaken = random() < labelNoise;
+
+  return {
+    ...measureCustomer(truth, featureNoise, gaussian),
+    risk: mistaken ? 1 - label : label,
+  };
+});
 ```
 
-**A rede neural nunca vê essa fórmula.** Ela recebe só as quatro features e os rótulos `0`/`1`, e precisa descobrir sozinha o padrão a partir dos exemplos. É exatamente por isso que a acurácia alta no teste é um resultado interessante: significa que a MLP reconstruiu, nos seus pesos, uma aproximação da regra escondida.
+O rótulo é calculado sobre `truth`, e o que chega ao CSV é `measureCustomer(truth, ...)`. **A resposta certa depende de um valor que nunca entra no arquivo.** É isso que cria um teto: nem a fórmula que gerou os rótulos consegue reconstruí-los a partir do que o modelo vê.
+
+A regra em si não mudou — e a rede continua sem vê-la:
+
+```javascript
+const riskScore = (customer) => {
+  const [income, debtRatio, latePayments, creditUtilization] =
+    toFeatureVector(customer);
+
+  return (
+    1.4 * debtRatio +
+    1.2 * latePayments +
+    1.0 * creditUtilization -
+    0.8 * income
+  );
+};
+```
+
+### Desbalanceamento: o limiar virou um quantil
+
+Antes o corte era a constante `RISK_RULE_THRESHOLD = 1.35`, escolhida na mão, e a taxa de inadimplência era o que desse — cerca de 46%. Um número mágico cujo efeito só aparecia rodando.
+
+Agora o corte é **derivado da taxa que se pede**:
+
+```javascript
+const quantile = (values, fraction) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = clamp(Math.floor(fraction * sorted.length), 0, sorted.length - 1);
+
+  return sorted[index];
+};
+
+const cut = quantile(scores, 1 - positiveRate);   // 0.15 → percentil 85
+```
+
+`positiveRate: 0.15` produz 15% de inadimplentes porque *é assim que quantil funciona*, não porque alguém calibrou um número até a conta fechar. Desbalancear mais é só empurrar a fração para cima.
+
+Com 15% de positivos, o dataset ganha a propriedade que faltava: **a acurácia deixa de significar alguma coisa sozinha**. Chutar "bom pagador" para todo mundo já acerta `0.8250` no conjunto de teste. É por isso que o projeto imprime o [baseline da classe majoritária](#-matriz-de-confusão) ao lado da acurácia — sem ele, `0.9517` parece ótimo, e são só 13 pontos de ganho sobre não fazer nada.
+
+### Ruído de medição: um teto que nenhum modelo ultrapassa
+
+Cada coluna recebe um desvio normal proporcional à sua faixa e volta para dentro dos limites válidos:
+
+```javascript
+const measureCustomer = (customer, noise, gaussian) => {
+  const measured = Object.fromEntries(
+    Object.entries(SYNTHETIC_BOUNDS).map(([column, [lowest, highest]]) => {
+      const drift = gaussian() * noise * (highest - lowest);
+
+      return [column, clamp(customer[column] + drift, lowest, highest)];
+    }),
+  );
+
+  return { ...measured, latePayments: Math.round(measured.latePayments) };
+};
+```
+
+Três decisões pequenas que importam:
+
+- **A normal vem de Box-Muller**, não de `Math.random()`. Ruído de medição costuma ser a soma de muitos erros pequenos e independentes, e o Teorema Central do Limite diz que essa soma tende à normal.
+- **O `clamp` não é detalhe**: sem ele apareceriam renda negativa e utilização de crédito de 130%, e a normalização passaria a devolver valores fora de `[0, 1]`.
+- **`latePayments` é arredondado** — "2,3 atrasos" não existe no sistema de nenhum banco.
+
+O efeito é medível sem treinar nada. Aplicando a **própria regra que gerou os rótulos** aos dados medidos, ela erra:
+
+| Dataset | A regra recupera o rótulo |
+| ------- | ------------------------: |
+| Sem ruído nenhum | `100,0%` |
+| Só `featureNoise: 0.05` | `98,0%` |
+| Medição + rótulo (o CSV atual) | `96,8%` |
+
+Esses 2 pontos da segunda linha são **irredutíveis**. Não existe arquitetura, otimizador ou quantidade de épocas que os recupere, porque a informação não está no arquivo. É o análogo controlado do que o [German Credit](#-dataset-real-german-credit) mostra sem pedir licença: o teto raramente é o modelo.
+
+Dois testes guardam exatamente essa afirmação — um exige teto `< 100%` com ruído, o outro exige teto `= 100%` sem ele.
+
+### Ruído de rótulo: a resposta certa também erra
+
+`labelNoise: 0.02` troca 2% dos desfechos. Um bom pagador que ficou desempregado, uma baixa lançada na conta errada, um `1` digitado onde era `0`.
+
+Em um dataset desbalanceado isso tem um efeito assimétrico que vale notar. Como 85% das linhas são negativas, trocar 2% delas gera *muito* mais positivos falsos do que se perde de positivos verdadeiros — no arquivo versionado, **12 rótulos viraram `1` e só 2 viraram `0`**. (São 14 trocas em 1.200 linhas, e não as 24 que 2% sugerem: cada linha é um sorteio independente, e esta semente calhou de dar poucas. Em 40 sementes a taxa média é `0.0196`.) A taxa de inadimplência sobe de `14,9%` para `15,8%`, e cerca de **um em cada dezesseis positivos do arquivo é puro ruído**.
+
+Rótulo minoritário é caro justamente por isso: a classe rara é a mais fácil de contaminar, porque a classe abundante é grande o bastante para inundá-la com os próprios erros.
+
+### O que cada botão fez com as métricas
+
+Cada variante foi escrita em CSV e lida de volta, e treinada com a **configuração exata de `npm start`** — mesmas épocas, mesmo *early stopping*, mesmo arredondamento. Média de **15 execuções**, com dataset e divisão fixos e só a inicialização dos pesos variando:
+
+| Dataset | Baseline | Acurácia | Ganho | AUC | Recall `0.5` | Custo `0.5` | Custo mín. |
+| ------- | -------: | -------: | ----: | --: | -----------: | ----------: | ---------: |
+| limpo + equilibrado *(o de antes)* | `0.5042` | `0.9847` ± 0.0014 | **+48 pts** | `0.9994` ± 0.0000 | `0.9840` | `10.7` | `4.6` |
+| limpo + desbalanceado | `0.8292` | `0.9597` ± 0.0099 | **+13 pts** | `0.9970` ± 0.0004 | `0.7691` | `39.6` | `8.2` |
+| ruidoso + equilibrado | `0.5083` | `0.9294` ± 0.0013 | **+42 pts** | `0.9876` ± 0.0001 | `0.9011` | `64.3` | `19.9` |
+| **ruidoso + desbalanceado** *(atual)* | `0.8250` | `0.9517` ± 0.0044 | **+13 pts** | `0.9770` ± 0.0010 | `0.7254` | `56.8` | `18.8` |
+
+Quatro leituras que só aparecem por causa do 2×2:
+
+**1. A acurácia subiu e o modelo piorou.** Compare as duas linhas ruidosas: ao desbalancear, a acurácia vai de `0.9294` para `0.9517` e a AUC vai de `0.9876` para `0.9770`. O modelo ficou **melhor no placar** e **pior em ordenar clientes**. Não há paradoxo: desbalancear aumenta a fatia de negativos, e negativos são fáceis. Este é o argumento inteiro contra reportar acurácia sozinha, em duas linhas de tabela.
+
+**2. A AUC ignora o desbalanceamento e denuncia o ruído.** Desbalancear sozinho mexe na terceira casa (`0.9994` → `0.9970`); ruído derruba **cinco vezes mais** (`0.9994` → `0.9876`). É consequência da definição: a AUC compara pares positivo–negativo, então a *proporção* entre as classes sai da conta. É por isso que ela é a métrica certa para responder "o modelo melhorou?" quando os positivos são raros.
+
+**3. O recall desaba e a precision sobe.** `0.9840` → `0.7254` de recall, contra `0.9859` → `0.9981` de precision. Com positivos raros, a rede aprende que apostar em "alto risco" quase nunca compensa, e passa a só marcar quando tem muita certeza. Fica **cautelosa** — e cautela, num modelo de crédito, é deixar passar **mais de um em cada quatro** inadimplentes. A precision quase perfeita não é virtude: é o sintoma.
+
+**4. É por isso que o limiar precisa ser escolhido.** O corte de menor custo cai de `0.4474` para `0.2862`: o desbalanceamento empurra as probabilidades todas para baixo, e o `0.5` herdado deixa de ser um lugar razoável para cortar. Ajustá-lo derruba o custo de `56.8` para `18.8` — **67% a menos**, sem treinar nada de novo. No dataset limpo e equilibrado, a mesma manobra poupava `6.1` unidades de custo; aqui poupa `38.0`.
+
+**5. E o erro padrão triplicou.** Repare nas duas colunas desbalanceadas: `± 0.0099` e `± 0.0044` de acurácia, contra `± 0.0014` e `± 0.0013` nas equilibradas. O mesmo dataset, a mesma arquitetura — só a raridade dos positivos mudou. Com 42 positivos no conjunto de teste, cada acerto ou erro move o recall em 2,4 pontos, e o *early stopping* passa a interromper o treino em épocas bem diferentes a cada execução. **Desbalancear não piora só o modelo: piora a sua capacidade de medi-lo.**
+
+O dataset sintético continua sendo mais fácil que o real, e deve mesmo — ele existe para que o pipeline seja verificável. Mas parou de ser fácil de graça.
 
 ---
 
@@ -375,7 +524,7 @@ Antes, cada execução sorteava 1200 clientes novos, então os números do READM
 Para isso funcionar, a geração precisa ser **idempotente**:
 
 ```javascript
-const ensureCsv = (filePath = CSV_PATH, total = 1200) => {
+const ensureCsv = (filePath = CSV_PATH, total = SYNTHETIC_TOTAL) => {
   if (fs.existsSync(filePath)) {
     return { path: filePath, created: false };
   }
@@ -391,7 +540,17 @@ Sem esse `existsSync`, versionar o CSV seria um incômodo: todo `npm start` rees
 | Comando | Efeito no CSV |
 | ------- | ------------- |
 | `npm start` | Usa o que está lá; só cria se o arquivo faltar |
-| `npm run seed` | **Regenera** com dados novos — mudança deliberada, que você commita se quiser |
+| `npm run seed` | **Regenera** a partir do código — mudança deliberada, que você commita se quiser |
+
+E como o gerador tem semente, `npm run seed` é **reprodutível**: rodar duas vezes produz o mesmo arquivo, byte a byte. Isso transforma o CSV versionado em algo auditável — quem clona reconstrói o arquivo a partir do código e confere que ninguém o editou à mão. Um teste faz exatamente essa comparação e falha se o gerador mudar sem que o CSV seja regerado.
+
+Para experimentar sem tocar no código, cada parâmetro do gerador é uma flag:
+
+```bash
+npm run seed -- --seed=99                        # outros clientes
+npm run seed -- --feature-noise=0 --label-noise=0  # dataset limpo
+npm run seed -- --positive-rate=0.5              # dataset equilibrado
+```
 
 Um dataset real — que você recebe em vez de gerar — entraria exatamente aqui, e o `createCustomers` sairia do caminho.
 
@@ -399,7 +558,7 @@ Um dataset real — que você recebe em vez de gerar — entraria exatamente aqu
 
 ## 🏦 Dataset real: German Credit
 
-Todo o laboratório até aqui rodou sobre dados que **este projeto inventou**. Isso foi útil — dá para conferir se a rede aprendeu, porque a regra que gerou os rótulos está a três linhas de distância. Mas também é a razão de a acurácia viver perto de `0.98`: o padrão existia, era limpo, e não havia mais nada no caminho.
+Todo o laboratório até aqui rodou sobre dados que **este projeto inventou**. Isso foi útil — dá para conferir se a rede aprendeu, porque a regra que gerou os rótulos está a três linhas de distância. O gerador sintético hoje [injeta ruído e desbalanceamento](#-geração-dos-dados-sintéticos) de propósito, e isso derruba a AUC de `0.9994` para `0.9770`; mas o ruído continua sendo *o ruído que nós escolhemos*, na quantidade que nós escolhemos.
 
 O **German Credit** troca esse conforto por realidade: 1.000 solicitações de crédito de verdade, coletadas por Hans Hofmann na Universidade de Hamburgo e publicadas em 1994. Ninguém escolheu a regra que separa bom de mau pagador — e boa parte dela simplesmente **não está nas colunas**.
 
@@ -415,9 +574,9 @@ npm run start:synthetic  # o laboratório sintético continua a um argumento
 | Clientes | 1.200 | 1.000 |
 | Colunas usadas | 4 | 19 (de 20) |
 | Entradas da rede | 4 | 57 (one-hot) |
-| Alto risco | ~46% | 30% |
+| Alto risco | 15,8% | 30% |
 | Origem dos rótulos | fórmula conhecida | comportamento real |
-| Ruído | nenhum | todo o que a realidade tem |
+| Ruído | [injetado de propósito](#-geração-dos-dados-sintéticos) e mensurável | todo o que a realidade tem, em quantidade desconhecida |
 
 ### As 19 colunas usadas
 
@@ -547,7 +706,7 @@ Baseline (classe majoritária): 0.7150
 AUC: 0.7497
 ```
 
-**A acurácia caiu de `0.99` para `0.75`.** E o número logo abaixo dela é o que importa: `0.7150` é o que se consegue **chutando "baixo risco" para todo mundo**, sem olhar feature nenhuma. O treino inteiro comprou 3,5 pontos percentuais.
+**A acurácia caiu de `0.96` no sintético para `0.75` aqui.** E o número logo abaixo dela é o que importa: `0.7150` é o que se consegue **chutando "baixo risco" para todo mundo**, sem olhar feature nenhuma. O treino inteiro comprou 3,5 pontos percentuais — e em [outras execuções](#uma-divisão-não-é-o-dataset) compra menos que isso, às vezes nada.
 
 Pior: no limiar `0.5`, o modelo pega **24 dos 57** maus pagadores do conjunto de teste — recall de `0.4211`.
 
@@ -587,7 +746,7 @@ A justificativa acima é de **correção**, não de desempenho. Vale medir a dif
 | **one-hot, 19 colunas** (atual) | **57** | **1.073** | `0.7776` ± 0.0070 | `99.9` ± 2.6 |
 | one-hot + L2 e dropout | 57 | 1.073 | `0.7812` ± 0.0063 | `97.2` ± 2.7 |
 
-*(média ± erro padrão sobre 15 sementes de embaralhamento)*
+*(média ± erro padrão sobre 15 sementes de embaralhamento — variar a divisão, e não os pesos, é o protocolo certo aqui, pelo motivo que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede)*
 
 **Todas as diferenças cabem dentro de um erro padrão.** Nem a codificação correta, nem 11 colunas a mais, nem as duas juntas moveram a AUC de forma distinguível de ruído.
 
@@ -598,6 +757,8 @@ Três leituras disso, todas úteis:
 2. **Mais features com o mesmo dado não é ganho automático.** O modelo saltou de 289 para 1.073 parâmetros treinando com as mesmas 640 linhas efetivas. A capacidade extra foi para decorar, não para generalizar — e é exatamente isso que a linha com L2 e dropout começa a corrigir (nominalmente a melhor das quatro, ainda dentro do ruído). Motivo direto para o próximo item da lista.
 
 3. **Correção e desempenho são eixos separados.** One-hot continua sendo a representação certa para `purpose`, mesmo sem mexer no número. Afirmar uma ordem que não existe é errado independentemente de a métrica notar.
+
+Um detalhe que o protocolo torna visível: **na divisão fixa do projeto, a variante ordinal vai melhor** — AUC `0.7527` ± 0.0014 contra `0.7356` ± 0.0025 do one-hot, uma diferença de várias vezes o erro padrão. Isso não contradiz a tabela acima; confirma o que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. Uma diferença que some ao trocar a divisão é uma propriedade **daquele sorteio**, não das codificações, e tratá-la como resultado seria exatamente o erro que a média de 15 sementes existe para evitar.
 
 > 🔬 Para reproduzir a comparação: `npm start` roda one-hot e `npm run start:ordinal` roda a codificação anterior sobre as mesmas 19 colunas. A variante ordinal existe no código **só para isso** — para que a frase "one-hot é melhor" possa ser medida em vez de repetida.
 
@@ -648,22 +809,52 @@ O que o laboratório entrega é a **medição**. Quem decide o que fazer com ela
 
 ### Comparação lado a lado
 
-Números de uma execução só oscilam bastante — a acurácia do dataset real já apareceu entre `0.69` e `0.76` entre rodadas. A tabela abaixo é a **média de 15 sementes**, com erro padrão:
+Média de **25 execuções sobre a divisão que o projeto fixa** — a mesma que `npm start` usa, com a mesma configuração de treino, então os baselines abaixo são exatamente os que aparecem no seu terminal. Só a inicialização dos pesos varia:
 
 | Métrica | Sintético | German Credit |
 | ------- | --------: | ------------: |
 | Entradas da rede | 4 | 57 |
-| Baseline (classe majoritária) | `0.5561` ± 0.0054 | `0.7123` ± 0.0062 |
-| Test accuracy | `0.9856` ± 0.0021 | `0.7520` ± 0.0067 |
-| **Ganho sobre o baseline** | **+43 pts** | **+4 pts** |
-| AUC | `0.9995` ± 0.0001 | `0.7759` ± 0.0057 |
-| Recall no limiar `0.5` | `0.9909` ± 0.0037 | `0.4820` ± 0.0138 |
-| Custo no limiar `0.5` | `8.3` ± 2.3 | `168.8` ± 5.1 |
-| Custo no limiar escolhido | `2.7` ± 0.7 | `99.3` ± 2.3 |
+| Baseline (classe majoritária) | `0.8250` | `0.7150` |
+| Test accuracy | `0.9477` ± 0.0056 | `0.7116` ± 0.0043 |
+| **Ganho sobre o baseline** | **+12 pts** | **−0,3 pt** |
+| AUC | `0.9756` ± 0.0010 | `0.7356` ± 0.0025 |
+| Recall no limiar `0.5` | `0.7010` ± 0.0321 | `0.4007` ± 0.0073 |
+| Custo no limiar `0.5` | `56.5` ± 3.8 | `193.3` ± 2.1 |
+| Custo no limiar escolhido | `20.6` ± 1.2 | `103.8` ± 1.0 |
 
-Duas linhas resumem a diferença entre um laboratório e um problema real. O **ganho sobre o baseline** cai de 43 para 4 pontos. E o **recall no limiar `0.5`** cai de `0.99` para `0.48`: o corte herdado, que no sintético pegava praticamente todos os inadimplentes, no dataset real deixa passar mais da metade. Escolher o limiar deixa de ser refinamento — corta o custo pela metade (`168.8` → `99.3`).
+Duas linhas resumem a diferença entre um laboratório e um problema real.
 
-O dataset sintético não estava errado — ele estava **fácil**. A regra existia, era determinística e cabia em quatro features. O German Credit é a lembrança de que, em dados reais, o teto raramente é o modelo: é o quanto de sinal existe nos dados.
+O **ganho sobre o baseline é negativo.** Nesta divisão, o modelo treinado no German Credit acerta `0.7116` contra `0.7150` de quem chuta "bom pagador" para todos os 200 clientes do teste, sem olhar coluna nenhuma. Três décimos de ponto **abaixo** de não fazer nada. E o **recall no limiar `0.5`** cai de `0.70` para `0.40`: o corte herdado deixa passar seis em cada dez maus pagadores.
+
+Um relatório que parasse na acurácia concluiria que o modelo é inútil — e estaria errado. A **AUC de `0.7356`** diz o contrário: ele *ordena* os clientes bem acima do acaso, e o que falta não é sinal, é **régua**. No limiar escolhido, o mesmo modelo, sem retreinar, derruba o custo de `193.3` para `103.8`.
+
+Este é o resultado mais útil do projeto inteiro, e ele precisou de três seções anteriores para ser dizível: **acurácia abaixo do baseline e AUC de `0.74` ao mesmo tempo**. Um número diz "não aprendeu nada", o outro diz "aprendeu, e o corte é que está no lugar errado". Só o segundo está certo — e nenhuma das duas conclusões seria visível sem a outra métrica ao lado.
+
+O dataset sintético não estava errado — ele estava **fácil**, e continua sendo o mais fácil dos dois mesmo depois do [ruído injetado](#-geração-dos-dados-sintéticos). A diferença é que agora dá para dizer *quanto* mais fácil, e por quê: no sintético o ruído é conhecido e limitado a 2 pontos irredutíveis; no German Credit ninguém sabe onde fica o teto.
+
+### Uma divisão não é o dataset
+
+Os números acima descrevem **a divisão que o projeto fixa** (semente `42`). Vale saber o quanto eles dependem dela. Sorteando 15 divisões diferentes:
+
+| | Sintético | German Credit |
+| --- | ---: | ---: |
+| Baseline médio | `0.8531` ± 0.0040 | `0.6910` ± 0.0072 |
+| Acurácia média | `0.9433` ± 0.0063 | `0.7433` ± 0.0076 |
+| Pior / melhor divisão | `0.9000` / `0.9750` | `0.6750` / `0.7850` |
+| AUC média | `0.9705` ± 0.0038 | `0.7693` ± 0.0072 |
+| Pior / melhor divisão | `0.9397` / `0.9926` | `0.7089` / `0.8242` |
+
+Três coisas ficam claras de uma vez:
+
+**A divisão importa mais que a inicialização.** A AUC do German Credit vai de `0.71` a `0.82` conforme o sorteio — onze pontos de amplitude, contra `± 0.0025` entre inicializações de peso na mesma divisão. O acaso do corte domina o acaso do treino por uma ordem de grandeza.
+
+**Até o baseline se move.** Ele varia de `0.6550` a `0.7300` entre divisões, porque a proporção de maus pagadores que cai no conjunto de teste muda a cada sorteio. Quando a própria régua oscila 7 pontos, comparar acurácias de uma execução só não significa nada.
+
+**A semente `42` calhou de ser ruim.** Na média das divisões o modelo real acerta `0.7433` contra `0.6910` de baseline — um ganho real de 5 pontos. Na divisão que o projeto fixa, esse ganho some e fica levemente negativo. **Os dois números estão certos**; eles respondem perguntas diferentes: "o que esperar de uma divisão qualquer?" e "o que esta divisão dá?".
+
+Isso é um resultado sobre o **tamanho do dataset**, não sobre o modelo: 200 linhas de teste, das quais ~60 são positivas, não sustentam três casas decimais. É o argumento concreto para os dois itens que faltam na lista de evoluções — **validação cruzada** e **split estratificado** —, que existem exatamente para trocar "a estimativa de um sorteio" pela "média de vários".
+
+E é por isso que a semente continua fixa. Sabendo que existe uma divisão que dá `0.7850`, a tentação de procurá-la é real; uma semente congelada no código é a defesa mais barata contra escolher o resultado depois de ver os resultados.
 
 ### Reprodutibilidade
 
@@ -899,14 +1090,19 @@ Por isso o limiar é uma decisão de negócio: quem escolhe é o custo relativo 
 ### Saída
 
 ```text
+Test accuracy: 0.9625
+Baseline (classe majoritária): 0.8250
+
 Matriz de confusão (limiar 0.5):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      112 (TN) |       2 (FP)
-Real ALTO  |        1 (FN) |     125 (TP)
+Real BAIXO |      198 (TN) |       0 (FP)
+Real ALTO  |        9 (FN) |      33 (TP)
 ```
 
-A diagonal principal (TN e TP) são os acertos; fora dela, os erros. Uma checagem útil: `(TP + TN) / total` tem que reproduzir a `accuracy` do `evaluate` — no exemplo acima, `(125 + 112) / 240 = 0.9875`. A suíte de testes verifica justamente isso.
+A diagonal principal (TN e TP) são os acertos; fora dela, os erros. Uma checagem útil: `(TP + TN) / total` tem que reproduzir a `accuracy` do `evaluate` — acima, `(198 + 33) / 240 = 0.9625`. A suíte de testes verifica justamente isso.
+
+E a matriz já conta uma história que a acurácia esconde. **Zero falsos positivos** parece excelente até você olhar a linha de baixo: 9 dos 42 inadimplentes passaram como bons. O modelo não está calibrado — está **encolhido**, marcando ALTO RISCO só quando tem certeza absoluta, porque [positivos são raros no dataset](#-geração-dos-dados-sintéticos). Uma coluna inteira de zeros é o retrato de um limiar no lugar errado, não de um classificador impecável.
 
 ---
 
@@ -958,12 +1154,14 @@ Sem isso, um único lote degenerado contamina o relatório inteiro com `NaN`.
 ### Saída
 
 ```text
-Precision: 0.9643 - dos marcados como ALTO RISCO, quantos eram
-Recall:    0.9818 - dos que eram ALTO RISCO, quantos foram pegos
-F1-score:  0.9730 - média harmônica entre precision e recall
+Precision: 1.0000 - dos marcados como ALTO RISCO, quantos eram
+Recall:    0.7857 - dos que eram ALTO RISCO, quantos foram pegos
+F1-score:  0.8800 - média harmônica entre precision e recall
 ```
 
-Conferindo contra a matriz da seção anterior: `108 / (108 + 4) = 0.9643` e `108 / (108 + 2) = 0.9818`.
+Conferindo contra a matriz da seção anterior: `33 / (33 + 0) = 1.0000` e `33 / (33 + 9) = 0.7857`.
+
+Precision `1.0000` é o caso extremo da tabela acima — o modelo só marca o que é óbvio. Repare que o **F1 desce para `0.88`** mesmo com precision perfeita: a média harmônica se recusa a premiar uma ponta às custas da outra. É exatamente para isso que ela existe.
 
 ### E o limiar, de novo
 
@@ -1022,9 +1220,9 @@ O tratamento de empates não é detalhe: sem ele a AUC fica dependente da ordem 
 ```text
 Curva ROC (O = limiar 0.5, . = aleatório):
     TPR
-1.0 | O**************************************|
+1.0 |  **************************************|
     |                                 ...    |
-    |                              ...       |
+    |O*                            ...       |
     |                           ...          |
     |                       ....             |
 0.5 |                    ...                 |
@@ -1036,7 +1234,7 @@ Curva ROC (O = limiar 0.5, . = aleatório):
     |*...                                    |
 0.0 +----------------------------------------+
     0.0                               FPR 1.0
-AUC: 0.9999
+AUC: 0.9763
 ```
 
 - `*` é a curva, `.` é a diagonal do classificador aleatório (`AUC = 0.5`);
@@ -1104,21 +1302,21 @@ const scorePoint = (point, { positives, negatives }, costs) => {
 Ajuste do limiar (FP custa 1, FN custa 5):
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
-Padrão (0.5)   | 0.5000 | 0.0492 | 0.9576 |  6 |  5 |    31
-Youden (max J) | 0.4027 | 0.0492 | 0.9915 |  6 |  1 |    11
-Menor custo    | 0.2993 | 0.0738 | 1.0000 |  9 |  0 |     9
+Padrão (0.5)   | 0.5000 | 0.0000 | 0.7857 |  0 |  9 |    45
+Youden (max J) | 0.3102 | 0.0303 | 0.9524 |  6 |  2 |    16
+Menor custo    | 0.3102 | 0.0303 | 0.9524 |  6 |  2 |    16
 
-Matriz no limiar escolhido (0.2993):
+Matriz no limiar escolhido (0.3102):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      113 (TN) |       9 (FP)
-Real ALTO  |        0 (FN) |     118 (TP)
+Real BAIXO |      192 (TN) |       6 (FP)
+Real ALTO  |        2 (FN) |      40 (TP)
 ```
 
 Duas leituras dessa tabela:
 
-1. **O corte herdado era caro.** Sair de `0.5` derrubou o custo de `31` para `9` — sem retreinar nada. A rede é a mesma; só a régua mudou.
-2. **Youden e custo discordam, e a discordância faz sentido.** Youden para em `0.4027`, onde o ganho de TPR começa a não compensar o de FPR *em taxa*. O critério de custo continua descendo até `0.2993`: aceita **3 falsos positivos a mais** para eliminar o **último falso negativo** — troca que só é boa porque FN vale 5×. A `0.5` no numerário do problema, Youden pararia no mesmo lugar.
+1. **O corte herdado era caro.** Sair de `0.5` derrubou o custo de `45` para `16` — 64% mais barato, sem retreinar nada. A rede é a mesma; só a régua mudou. Compare as duas matrizes: os falsos negativos caem de **9 para 2**, ao preço de 6 falsos positivos. Como FN vale 5× FP, é uma troca boa por larga margem.
+2. **Aqui Youden e custo coincidiram — nem sempre coincidem.** Nesta execução os dois critérios apontaram `0.3102`. Isso acontece quando o ponto de maior `TPR - FPR` já é o de menor custo. No [dataset real](#o-resultado--e-por-que-ele-é-a-melhor-parte) eles divergem: Youden para em `0.2708` e o critério de custo continua descendo até `0.1669`, aceitando 30 falsos positivos a mais para eliminar 9 falsos negativos — troca que só compensa porque FN vale 5×.
 
 O efeito da razão de custos, isolado numa curva difícil:
 
@@ -1257,13 +1455,21 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | Export | Tipo | Papel |
 | ------ | ---- | ----- |
 | `INCOME_MIN`, `INCOME_RANGE`, `MAX_LATE_PAYMENTS` | constantes | Faixas usadas na normalização |
-| `RISK_RULE_THRESHOLD` | constante | Corte `1.35` da regra que gera os rótulos |
 | `DECISION_THRESHOLD` | constante | Corte `0.5` do classificador |
+| `SYNTHETIC_SEED`, `SYNTHETIC_TOTAL` | constantes | Semente e tamanho do dataset sintético |
+| `SYNTHETIC_POSITIVE_RATE` | constante | Fração alvo de inadimplentes — `0.15` |
+| `SYNTHETIC_FEATURE_NOISE`, `SYNTHETIC_LABEL_NOISE` | constantes | Ruído de medição (`0.05`) e de rótulo (`0.02`) |
+| `SYNTHETIC_BOUNDS` | constante | Faixa válida de cada coluna, usada para escalar e limitar o ruído |
 | `normalizeIncome`, `normalizeLatePayments` | função | Normalizações min-max individuais |
 | `toFeatureVector` | função | Cliente bruto → vetor de 4 features (sintético) |
 | `classify` | função | Probabilidade → `'ALTO RISCO'` / `'BAIXO RISCO'` |
 | `MODEL_DIR` | constante | Pasta `./model` onde o modelo é persistido |
 | `CSV_PATH`, `CSV_COLUMNS`, `CSV_LABEL_COLUMN`, `CSV_PRECISION` | constantes | Caminho, esquema e precisão do arquivo |
+| `createGaussian` | função | Sorteio uniforme → normal padrão (Box-Muller) |
+| `clamp` | função | Prende um valor entre mínimo e máximo |
+| `quantile` | função | Valor abaixo do qual está uma fração dos dados |
+| `riskScore` | função | Regra que gera os rótulos, aplicada ao cliente **verdadeiro** |
+| `measureCustomer` | função | Cliente verdadeiro → cliente **medido**, com ruído |
 | `createCustomers` | função | Gera clientes em unidades brutas, com `risk` |
 | `toDataset` | função | Clientes brutos → `{ features, labels }` |
 | `createDataset` | função | Gera `{ features, labels }` sintéticos |
@@ -1406,7 +1612,7 @@ E duas coisas que **só aparecem no dataset real**, e que são o motivo de ele e
 - ⚠️ precision (`0.5510`) e recall (`0.4737`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade;
 - ⚠️ a razão de aprovação entre os grupos fica perto de `0.80` → o modelo trata mulheres e homens de forma diferente [sem nunca ter recebido a coluna de sexo](#a-coluna-que-o-modelo-não-recebeu).
 
-No dataset sintético, os mesmos números ficam em `0.9875` de acurácia contra `0.5375` de baseline, com AUC `0.9997` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real.
+No dataset sintético, os mesmos números ficam em `0.9477` de acurácia contra `0.8250` de baseline, com AUC `0.9756` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real. Note que **o alerta da acurácia vale para os dois**: com 15,8% de inadimplentes, `0.95` também são só 12 pontos acima de chutar sempre "bom pagador".
 
 ---
 
@@ -1457,8 +1663,11 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 | Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado |
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
 | Modelo salvo sem versionar o **scaler** junto                    | Pesos novos com pré-processamento antigo → training-serving skew |
-| Split simples em vez de **estratificado**                        | Com 30% de positivos, um sorteio ruim desequilibra o hold-out |
-| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande |
+| Split simples em vez de **estratificado**                        | Com 30% de positivos no real e 15,8% no sintético, um sorteio ruim desequilibra o hold-out |
+| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande — [medida aqui](#uma-divisão-não-é-o-dataset): a AUC do dataset real varia `0.70`–`0.81` conforme o sorteio |
+| Nenhum tratamento para o **desbalanceamento** durante o treino   | O dataset agora tem 15,8% de positivos, mas o treino não usa `classWeight`, reamostragem nem *focal loss*; a única correção aplicada é [no limiar](#-ajuste-do-limiar-de-decisão), depois do fato |
+| Ruído sintético **normal e independente** por coluna             | Erro real é enviesado (renda é subdeclarada, não sorteada em torno da verdade) e correlacionado entre colunas |
+| Ruído de rótulo **simétrico**                                    | Na prática um mau pagador registrado como bom é bem mais comum que o contrário |
 
 Duas limitações da versão anterior **deixaram de existir** com o dataset real:
 
@@ -1468,6 +1677,8 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~Split por fatiamento sem embaralhar antes~~ | `shuffle` com [semente fixa](#reprodutibilidade) antes do corte |
 | ~~Categorias codificadas como ordinais~~ | [One-hot](#por-que-one-hot-e-não-ordinal) nas 12 qualitativas |
 | ~~8 das 20 colunas aproveitadas~~ | 19 colunas; a vigésima é [auditoria, não feature](#a-coluna-que-o-modelo-não-recebeu) |
+| ~~Dataset sintético limpo e quase equilibrado~~ | [Ruído e desbalanceamento](#-geração-dos-dados-sintéticos) injetados, com o efeito de cada um medido |
+| ~~CSV sintético gerado com `Math.random()`, irreprodutível~~ | Gerador com semente: `npm run seed` reconstrói o arquivo versionado byte a byte |
 
 ---
 
@@ -1483,7 +1694,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~carregar dados de um CSV~~ — feito, veja [Carregando dados de um CSV](#-carregando-dados-de-um-csv);
 - [x] ~~usar um dataset real de crédito~~ — feito, veja [Dataset real: German Credit](#-dataset-real-german-credit);
 - [x] ~~codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as colunas restantes~~ — feito, veja [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal);
-- [ ] adicionar ruído e desbalanceamento aos dados sintéticos;
+- [x] ~~adicionar ruído e desbalanceamento aos dados sintéticos~~ — feito, veja [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos);
 - [ ] **regularização L2 e dropout** — a [medição](#one-hot-melhorou-o-modelo-não) mostra que é o próximo passo natural;
 - [ ] mitigar a disparidade medida, não só reportá-la;
 - [ ] validação cruzada e split estratificado;
@@ -1539,7 +1750,7 @@ Com o dataset real isso ficou mais concreto: a escala não é mais um punhado de
 
 ## 📚 Conceitos demonstrados
 
-`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `One-hot encoding` · `Dummy variable trap` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Fairness` · `Disparate impact` · `Regra dos quatro quintos` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
+`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `One-hot encoding` · `Dummy variable trap` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Ruído de medição` · `Ruído de rótulo` · `Erro irredutível` · `Box-Muller` · `PRNG com semente` · `Quantil` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Fairness` · `Disparate impact` · `Regra dos quatro quintos` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
 
 ---
 
@@ -1563,6 +1774,9 @@ Modelos de crédito em produção exigem, entre outros pontos: dados representat
 - [`@tensorflow/tfjs-node`](https://www.npmjs.com/package/@tensorflow/tfjs-node)
 - Hofmann, H. (1994). **Statlog (German Credit Data)**. UCI Machine Learning Repository. [DOI: 10.24432/C5NC77](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data) — CC BY 4.0
 - Barocas, S., Hardt, M., Narayanan, A. — [*Fairness and Machine Learning*](https://fairmlbook.org/) (sobre por que os critérios de justiça são incompatíveis entre si quando as taxas-base diferem)
+- Box, G. E. P., Muller, M. E. (1958). **A Note on the Generation of Random Normal Deviates**. *Annals of Mathematical Statistics*, 29(2) — a transformação usada para gerar o [ruído de medição](#ruído-de-medição-um-teto-que-nenhum-modelo-ultrapassa)
+- Frénay, B., Verleysen, M. (2014). **Classification in the Presence of Label Noise: a Survey**. *IEEE Transactions on Neural Networks and Learning Systems*, 25(5) — por que rótulo errado dói mais na classe minoritária
+- He, H., Garcia, E. A. (2009). **Learning from Imbalanced Data**. *IEEE Transactions on Knowledge and Data Engineering*, 21(9) — o problema que a [taxa de 15,8%](#desbalanceamento-o-limiar-virou-um-quantil) introduz de propósito
 
 ---
 

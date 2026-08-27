@@ -9,7 +9,7 @@
     "start:ordinal": "node index.js --source=german-ordinal",
     "start:synthetic": "node index.js --source=synthetic",
     "fetch:german": "node scripts/fetch-german.js",
-    "seed": "node -e \"const { writeCustomersCsv, createCustomers, CSV_PATH } = require('./index'); writeCustomersCsv(createCustomers()); console.log('Dataset regerado em:', CSV_PATH);\"",
+    "seed": "node scripts/seed.js",
     "test": "node --test",
     "test:watch": "node --test --watch"
   },

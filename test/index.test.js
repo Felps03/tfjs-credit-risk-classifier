@@ -13,6 +13,17 @@ const {
   normalizeLatePayments,
   toFeatureVector,
   classify,
+  SYNTHETIC_SEED,
+  SYNTHETIC_TOTAL,
+  SYNTHETIC_POSITIVE_RATE,
+  SYNTHETIC_FEATURE_NOISE,
+  SYNTHETIC_LABEL_NOISE,
+  SYNTHETIC_BOUNDS,
+  createGaussian,
+  clamp,
+  quantile,
+  riskScore,
+  measureCustomer,
   createCustomers,
   toDataset,
   createDataset,
@@ -21,6 +32,7 @@ const {
   ensureCsv,
   readCustomersCsv,
   loadDatasetCsv,
+  CSV_PATH,
   CSV_COLUMNS,
   CSV_LABEL_COLUMN,
   splitDataset,
@@ -241,6 +253,344 @@ describe('classify', () => {
 });
 
 // ==================================================
+// Ruído e desbalanceamento
+// ==================================================
+const desvioPadrao = (valores) => {
+  const media = valores.reduce((a, b) => a + b, 0) / valores.length;
+  const variancia = valores
+    .reduce((soma, valor) => soma + (valor - media) ** 2, 0) / valores.length;
+
+  return { media, desvio: Math.sqrt(variancia) };
+};
+
+const taxaPositivos = (customers) =>
+  customers.filter(({ risk }) => risk === 1).length / customers.length;
+
+describe('createGaussian', () => {
+  it('dados muitos sorteios, quando medidos, então a média fica perto de 0 e o desvio de 1', () => {
+    // Given — Box-Muller precisa devolver a normal padrão, não qualquer curva
+    const gaussian = createGaussian(createRandom(1));
+
+    // When
+    const amostras = Array.from({ length: 20000 }, () => gaussian());
+    const { media, desvio } = desvioPadrao(amostras);
+
+    // Then
+    assert.ok(Math.abs(media) < 0.03, `media ${media}`);
+    assert.ok(Math.abs(desvio - 1) < 0.03, `desvio ${desvio}`);
+  });
+
+  it('dados sorteios normais, quando comparados, então há valores dos dois lados de 0', () => {
+    // Given / When — uma normal simétrica não pode ser só positiva
+    const gaussian = createGaussian(createRandom(2));
+    const amostras = Array.from({ length: 200 }, () => gaussian());
+
+    // Then
+    assert.ok(amostras.some((valor) => valor > 0));
+    assert.ok(amostras.some((valor) => valor < 0));
+  });
+
+  it('dada a mesma semente, quando o gerador roda de novo, então repete a sequência', () => {
+    // Given / When
+    const primeira = Array.from({ length: 5 }, createGaussian(createRandom(9)));
+    const segunda = Array.from({ length: 5 }, createGaussian(createRandom(9)));
+
+    // Then
+    assert.deepEqual(segunda, primeira);
+  });
+
+  it('dado um sorteio uniforme de 0, quando transformado, então não vira infinito', () => {
+    // Given — log(0) = -Infinity; o gerador usa 1 - random() para evitar
+    const gaussian = createGaussian(() => 0);
+
+    // Then
+    assert.ok(Number.isFinite(gaussian()));
+  });
+});
+
+describe('clamp', () => {
+  it('dado um valor dentro da faixa, quando limitado, então não muda', () => {
+    assert.equal(clamp(0.5, 0, 1), 0.5);
+  });
+
+  it('dado um valor abaixo do mínimo, quando limitado, então vira o mínimo', () => {
+    assert.equal(clamp(-3, 0, 1), 0);
+  });
+
+  it('dado um valor acima do máximo, quando limitado, então vira o máximo', () => {
+    assert.equal(clamp(7, 0, 1), 1);
+  });
+});
+
+describe('quantile', () => {
+  it('dada uma lista, quando o quantil 0 é pedido, então devolve o menor valor', () => {
+    assert.equal(quantile([5, 1, 9, 3], 0), 1);
+  });
+
+  it('dada uma lista, quando o quantil 1 é pedido, então devolve o maior valor', () => {
+    assert.equal(quantile([5, 1, 9, 3], 1), 9);
+  });
+
+  it('dada uma lista fora de ordem, quando o quantil é calculado, então a ordem não importa', () => {
+    // Given — a função ordena por conta própria
+    const embaralhada = [9, 3, 1, 5];
+    const ordenada = [1, 3, 5, 9];
+
+    // Then
+    assert.equal(quantile(embaralhada, 0.5), quantile(ordenada, 0.5));
+  });
+
+  it('dada uma lista, quando o quantil é calculado, então a lista original não muda', () => {
+    // Given
+    const valores = [5, 1, 9, 3];
+
+    // When
+    quantile(valores, 0.5);
+
+    // Then
+    assert.deepEqual(valores, [5, 1, 9, 3], 'sort() sem cópia mutaria a entrada');
+  });
+
+  it('dado um corte no quantil 0.85, quando os valores acima são contados, então são ~15%', () => {
+    // Given — é assim que o desbalanceamento é produzido
+    const valores = Array.from({ length: 1000 }, (naoUsado, i) => i);
+
+    // When
+    const corte = quantile(valores, 0.85);
+    const acima = valores.filter((valor) => valor > corte).length;
+
+    // Then
+    assert.ok(Math.abs(acima / 1000 - 0.15) < 0.01, `taxa ${acima / 1000}`);
+  });
+});
+
+describe('riskScore', () => {
+  it('dado um cliente, quando a dívida sobe, então o escore de risco sobe', () => {
+    // Given
+    const base = {
+      income: 8000, debtRatio: 0.2, latePayments: 1, creditUtilization: 0.3,
+    };
+
+    // When
+    const endividado = riskScore({ ...base, debtRatio: 0.9 });
+
+    // Then
+    assert.ok(endividado > riskScore(base));
+  });
+
+  it('dado um cliente, quando a renda sobe, então o escore de risco cai', () => {
+    // Given
+    const base = {
+      income: 3000, debtRatio: 0.5, latePayments: 2, creditUtilization: 0.5,
+    };
+
+    // When
+    const rico = riskScore({ ...base, income: 14000 });
+
+    // Then
+    assert.ok(rico < riskScore(base), 'renda é o único coeficiente negativo');
+  });
+
+  it('dados clientes idênticos, quando pontuados, então o escore é determinístico', () => {
+    // Given
+    const customer = {
+      income: 5000, debtRatio: 0.4, latePayments: 3, creditUtilization: 0.6,
+    };
+
+    // Then
+    assert.equal(riskScore(customer), riskScore({ ...customer }));
+  });
+});
+
+describe('measureCustomer', () => {
+  const verdadeiro = {
+    income: 8000, debtRatio: 0.5, latePayments: 2, creditUtilization: 0.5,
+  };
+
+  it('dado ruído zero, quando o cliente é medido, então a medida é a verdade', () => {
+    // Given / When — o gerador limpo precisa continuar disponível
+    const medido = measureCustomer(verdadeiro, 0, createGaussian(createRandom(1)));
+
+    // Then
+    assert.deepEqual(medido, verdadeiro);
+  });
+
+  it('dado ruído, quando o cliente é medido, então a medida difere da verdade', () => {
+    // Given / When
+    const medido = measureCustomer(verdadeiro, 0.05, createGaussian(createRandom(1)));
+
+    // Then
+    assert.notEqual(medido.income, verdadeiro.income);
+    assert.notEqual(medido.debtRatio, verdadeiro.debtRatio);
+  });
+
+  it('dado ruído enorme, quando o cliente é medido, então nada sai dos limites válidos', () => {
+    // Given — sem clamp apareceria renda negativa e utilização de 300%
+    const gaussian = createGaussian(createRandom(3));
+
+    // When
+    const medidos = Array.from({ length: 300 }, () => measureCustomer(verdadeiro, 5, gaussian));
+
+    // Then
+    Object.entries(SYNTHETIC_BOUNDS).forEach(([coluna, [minimo, maximo]]) => {
+      const fora = medidos.filter((medido) => medido[coluna] < minimo || medido[coluna] > maximo);
+
+      assert.deepEqual(fora, [], `${coluna} saiu de [${minimo}, ${maximo}]`);
+    });
+  });
+
+  it('dado ruído, quando os atrasos são medidos, então continuam inteiros', () => {
+    // Given — "2,3 atrasos" não existe no sistema do banco
+    const gaussian = createGaussian(createRandom(4));
+
+    // When
+    const medidos = Array.from({ length: 100 }, () => measureCustomer(verdadeiro, 0.2, gaussian));
+
+    // Then
+    assert.ok(medidos.every((medido) => Number.isInteger(medido.latePayments)));
+  });
+
+  it('dado um cliente medido, quando as colunas são listadas, então são as mesmas do CSV', () => {
+    // Given / When
+    const medido = measureCustomer(verdadeiro, 0.05, createGaussian(createRandom(5)));
+
+    // Then — nada de campo extra vazando para o arquivo
+    assert.deepEqual(
+      Object.keys(medido).sort(),
+      CSV_COLUMNS.filter((coluna) => coluna !== CSV_LABEL_COLUMN).sort(),
+    );
+  });
+});
+
+describe('desbalanceamento', () => {
+  it('dada a taxa padrão, quando os clientes são gerados, então a minoria fica perto de 15%', () => {
+    // Given / When
+    const taxa = taxaPositivos(createCustomers(1200));
+
+    // Then
+    assert.ok(Math.abs(taxa - SYNTHETIC_POSITIVE_RATE) < 0.03, `taxa ${taxa}`);
+  });
+
+  it('dada uma taxa pedida, quando os clientes são gerados, então ela é respeitada', () => {
+    // Given — o limiar é um quantil, então a taxa é um parâmetro de verdade
+    const limpo = { featureNoise: 0, labelNoise: 0 };
+
+    // When / Then
+    [0.05, 0.25, 0.5].forEach((positiveRate) => {
+      const taxa = taxaPositivos(createCustomers(1000, { ...limpo, positiveRate }));
+
+      assert.ok(Math.abs(taxa - positiveRate) < 0.02, `pedi ${positiveRate}, veio ${taxa}`);
+    });
+  });
+
+  it('dado o dataset desbalanceado, quando o baseline é medido, então passa de 0.8', () => {
+    // Given — é o número que torna a acurácia sozinha inútil
+    const { labels } = createDataset(1200);
+
+    // When
+    const baseline = majorityBaseline(labels);
+
+    // Then
+    assert.ok(baseline > 0.8, `baseline ${baseline}`);
+  });
+});
+
+describe('ruído de rótulo', () => {
+  const limpo = { featureNoise: 0, labelNoise: 0 };
+
+  it('dado ruído de rótulo zero, quando os rótulos saem, então seguem a regra', () => {
+    // Given / When
+    const customers = createCustomers(500, limpo);
+    const escores = customers.map(riskScore);
+    const corte = quantile(escores, 1 - SYNTHETIC_POSITIVE_RATE);
+
+    // Then — sem ruído, a regra reproduz o rótulo exatamente
+    const divergentes = customers
+      .filter((customer, i) => (escores[i] > corte ? 1 : 0) !== customer.risk);
+
+    assert.deepEqual(divergentes, []);
+  });
+
+  it('dado ruído de rótulo, quando comparado ao limpo, então alguns rótulos divergem', () => {
+    // Given — mesma semente, mesmos clientes; só o rótulo muda
+    const semRuido = createCustomers(1000, { featureNoise: 0, labelNoise: 0 });
+    const comRuido = createCustomers(1000, { featureNoise: 0, labelNoise: 0.05 });
+
+    // When
+    const trocados = semRuido.filter((customer, i) => customer.risk !== comRuido[i].risk).length;
+
+    // Then — ~5% de 1000, com folga para a variação do sorteio
+    assert.ok(trocados > 20 && trocados < 90, `trocados ${trocados}`);
+  });
+
+  it('dado ruído de rótulo total, quando os rótulos saem, então todos estão invertidos', () => {
+    // Given — labelNoise 1 troca sempre: prova que a troca é o que diz ser
+    const original = createCustomers(100, { featureNoise: 0, labelNoise: 0 });
+    const invertido = createCustomers(100, { featureNoise: 0, labelNoise: 1 });
+
+    // Then
+    assert.ok(original.every((customer, i) => customer.risk === 1 - invertido[i].risk));
+  });
+});
+
+describe('ruído de medição cria um teto', () => {
+  it('dado um dataset ruidoso, quando a própria regra é aplicada à medida, então ela erra', () => {
+    // Given — o rótulo vem do cliente VERDADEIRO, e o arquivo guarda a
+    // MEDIDA. Nem a fórmula que gerou os rótulos os recupera a partir do
+    // que o modelo vê: é um teto que nenhuma arquitetura ultrapassa.
+    const customers = createCustomers(1200, { labelNoise: 0 });
+    const escores = customers.map(riskScore);
+    const corte = quantile(escores, 1 - SYNTHETIC_POSITIVE_RATE);
+
+    // When
+    const acertos = customers
+      .filter((customer, i) => (escores[i] > corte ? 1 : 0) === customer.risk).length;
+    const teto = acertos / customers.length;
+
+    // Then
+    assert.ok(teto < 1, `com ruído o teto precisa ficar abaixo de 100%, veio ${teto}`);
+    assert.ok(teto > 0.9, `mas ainda bem acima do acaso, veio ${teto}`);
+  });
+
+  it('dado um dataset limpo, quando a mesma conta é feita, então o teto é 100%', () => {
+    // Given — o contraste que mostra de onde vem o teto acima
+    const customers = createCustomers(1200, { featureNoise: 0, labelNoise: 0 });
+    const escores = customers.map(riskScore);
+    const corte = quantile(escores, 1 - SYNTHETIC_POSITIVE_RATE);
+
+    // When
+    const acertos = customers
+      .filter((customer, i) => (escores[i] > corte ? 1 : 0) === customer.risk).length;
+
+    // Then
+    assert.equal(acertos, customers.length);
+  });
+});
+
+describe('data/customers.csv versionado', () => {
+  it('dado o CSV do repositório, quando regerado pelo código, então sai idêntico', () => {
+    // Given — o gerador tem semente, então o arquivo pode ser reconstruído
+    // e conferido. Se este teste falhar, ou o gerador mudou sem
+    // `npm run seed`, ou alguém editou o CSV à mão.
+    const versionado = fs.readFileSync(CSV_PATH, 'utf8');
+
+    // When
+    const regerado = `${toCsv(createCustomers())}\n`;
+
+    // Then
+    assert.equal(regerado, versionado, 'rode `npm run seed` para atualizar o CSV');
+  });
+
+  it('dado o CSV do repositório, quando as classes são contadas, então a minoria é ~15%', () => {
+    // Given / When
+    const taxa = taxaPositivos(createCustomers());
+
+    // Then
+    assert.ok(taxa > 0.1 && taxa < 0.2, `taxa ${taxa}`);
+  });
+});
+
+// ==================================================
 // Geração do dataset
 // ==================================================
 describe('createDataset', () => {
@@ -261,7 +611,8 @@ describe('createDataset', () => {
     const { features } = createDataset();
 
     // Then
-    assert.equal(features.length, 1200);
+    assert.equal(features.length, SYNTHETIC_TOTAL);
+    assert.equal(SYNTHETIC_TOTAL, 1200);
   });
 
   it('dado um dataset gerado, quando as features são inspecionadas, então todas estão normalizadas entre 0 e 1', () => {
@@ -291,7 +642,7 @@ describe('createDataset', () => {
   });
 
   it('dado um dataset grande, quando os rótulos são contados, então as duas classes aparecem', () => {
-    // Given — com 1200 amostras a chance de uma classe sumir é desprezível
+    // Given — mesmo desbalanceado, 15% de 1200 são ~180 positivos
     const { labels } = createDataset(1200);
 
     // When
@@ -336,6 +687,26 @@ describe('createCustomers', () => {
 
     // Then
     assert.deepEqual([...riscos].sort(), [0, 1]);
+  });
+
+  it('dada a mesma semente, quando os clientes são gerados duas vezes, então saem idênticos', () => {
+    // Given — reprodutibilidade é o que torna o CSV versionado auditável
+    const primeira = createCustomers(20, { seed: 123 });
+
+    // When
+    const segunda = createCustomers(20, { seed: 123 });
+
+    // Then
+    assert.deepEqual(segunda, primeira);
+  });
+
+  it('dadas sementes diferentes, quando os clientes são gerados, então os dados mudam', () => {
+    // Given / When
+    const sete = createCustomers(20, { seed: 7 });
+    const oito = createCustomers(20, { seed: 8 });
+
+    // Then
+    assert.notDeepEqual(oito, sete, 'a semente precisa ter efeito');
   });
 
   it('dados clientes brutos, quando convertidos em dataset, então batem com createDataset', () => {
