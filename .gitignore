@@ -38,9 +38,13 @@ tfjs_logs/
 # --------------------------------------------------
 # Dados
 # --------------------------------------------------
-# Datasets locais — descomente se adicionar CSVs grandes
+# data/customers.csv é versionado de propósito: o dataset fica estável
+# entre execuções, os números do README batem com o que se vê ao rodar,
+# e quem clona treina sem gerar nada antes. `npm start` só cria o arquivo
+# se ele não existir; `npm run seed` regenera de propósito.
+#
+# Descomente se o dataset crescer a ponto de pesar no repositório:
 # /data/
-# *.csv
 
 # --------------------------------------------------
 # Variáveis de ambiente e segredos
