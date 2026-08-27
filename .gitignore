@@ -38,12 +38,17 @@ tfjs_logs/
 # --------------------------------------------------
 # Dados
 # --------------------------------------------------
-# data/customers.csv é versionado de propósito: o dataset fica estável
-# entre execuções, os números do README batem com o que se vê ao rodar,
-# e quem clona treina sem gerar nada antes. `npm start` só cria o arquivo
-# se ele não existir; `npm run seed` regenera de propósito.
+# Os dois CSVs de data/ são versionados de propósito: os datasets ficam
+# estáveis entre execuções, os números do README batem com o que se vê ao
+# rodar, e quem clona treina offline sem baixar nem gerar nada antes.
 #
-# Descomente se o dataset crescer a ponto de pesar no repositório:
+#   german-credit.csv  dataset REAL (UCI/Statlog), CC BY 4.0 — redistribuível
+#                      com atribuição, que está no README. ~23 KB.
+#                      Rebaixar e reconverter: `npm run fetch:german`.
+#   customers.csv      dataset sintético. `npm start --source=synthetic` só
+#                      cria se faltar; `npm run seed` regenera de propósito.
+#
+# Descomente se algum dataset crescer a ponto de pesar no repositório:
 # /data/
 
 # --------------------------------------------------

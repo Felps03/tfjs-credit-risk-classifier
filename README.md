@@ -263,9 +263,9 @@ const toFeatureVector = ({
 
 > 💡 Aqui as constantes de normalização (`2000`, `13000`, `5`) são conhecidas de antemão porque nós geramos os dados. **Em um projeto real elas devem ser calculadas apenas no conjunto de treino** e depois reaplicadas em validação/teste — caso contrário há vazamento de dados (*data leakage*).
 >
-> É exatamente o que o [dataset real](#-agora-a-normalização-precisa-ser-medida) obrigou a fazer: lá as faixas são **medidas**, e só sobre o treino.
+> É exatamente o que o [dataset real](#agora-a-normalização-precisa-ser-medida) obrigou a fazer: lá as faixas são **medidas**, e só sobre o treino.
 
-As features acima descrevem o dataset sintético. O dataset real tem [as suas próprias oito](#-as-8-features-escolhidas) — e o pipeline atende as duas sem saber qual está em uso.
+As features acima descrevem o dataset sintético. O dataset real tem [as suas próprias oito](#as-8-features-escolhidas) — e o pipeline atende as duas sem saber qual está em uso.
 
 ---
 
@@ -595,8 +595,8 @@ Uma **MLP** com duas camadas ocultas:
 
 ```mermaid
 flowchart LR
-    I(["Entrada<br/>4 features"])
-    H1["Dense 16 · ReLU<br/>80 parâmetros"]
+    I(["Entrada<br/>8 features (real)<br/>4 (sintético)"])
+    H1["Dense 16 · ReLU<br/>144 parâmetros"]
     H2["Dense 8 · ReLU<br/>136 parâmetros"]
     O["Dense 1 · Sigmoid<br/>9 parâmetros"]
     P(["Probabilidade<br/>0 a 1"])
@@ -615,13 +615,15 @@ flowchart LR
     class O out
 ```
 
-Total: **225 parâmetros treináveis** — é o que o `model.summary()` imprime ao rodar.
+Total: **289 parâmetros treináveis** no dataset real (**225** no sintético, que tem 4 features) — é o que o `model.summary()` imprime ao rodar.
+
+A largura da entrada é o **único** ponto da rede que depende do dataset:
 
 ```javascript
-const buildModel = () => {
+const buildModel = (inputSize = 4) => {
   const model = tf.sequential();
 
-  model.add(tf.layers.dense({ inputShape: [4], units: 16, activation: 'relu' }));
+  model.add(tf.layers.dense({ inputShape: [inputSize], units: 16, activation: 'relu' }));
   model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
   model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
 
@@ -640,6 +642,10 @@ const buildModel = () => {
 | **ReLU**      | Introduz não-linearidade barata e evita o desaparecimento de gradiente das camadas ocultas |
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
 | **16 → 8**    | Funil: capacidade suficiente para o padrão, pequena o bastante para não decorar o dataset  |
+
+```javascript
+const model = buildModel(source.featureNames.length);   // 4 ou 8
+```
 
 O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução.
 
@@ -687,11 +693,11 @@ O treino monitora a `val_loss` e **para sozinho** se ela não melhorar por 5 ép
 
 ```mermaid
 flowchart TD
-    A["📦 Dataset<br/>1200 clientes"]
-    A -->|80%| B["Treino<br/>960 clientes"]
-    A -->|20%| C["🔒 Teste<br/>240 clientes"]
-    B -->|80%| D["Treino efetivo<br/>768 · ajusta os pesos"]
-    B -->|20%| E["Validação<br/>192 · early stopping"]
+    A["📦 Dataset<br/>1000 clientes (real)"]
+    A -->|80%| B["Treino<br/>800 clientes"]
+    A -->|20%| C["🔒 Teste<br/>200 clientes"]
+    B -->|80%| D["Treino efetivo<br/>640 · ajusta os pesos"]
+    B -->|20%| E["Validação<br/>160 · early stopping"]
     C --> F["Avaliação final<br/>executada uma única vez"]
 
     classDef root  fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
@@ -706,16 +712,27 @@ flowchart TD
 ```
 
 ```javascript
-const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
-  const trainSize = Math.floor(features.length * trainRatio);
+const splitCustomers = (customers, trainRatio = 0.8) => {
+  const trainSize = Math.floor(customers.length * trainRatio);
 
   return {
-    trainFeatures: features.slice(0, trainSize),
-    trainLabels: labels.slice(0, trainSize),
-    testFeatures: features.slice(trainSize),
-    testLabels: labels.slice(trainSize),
+    trainCustomers: customers.slice(0, trainSize),
+    testCustomers: customers.slice(trainSize),
   };
 };
+```
+
+Duas decisões estão embutidas na ordem das operações do `main()`:
+
+**1. Embaralhar antes de cortar.** Com dados sintéticos era indiferente — cada linha é sorteada de forma independente. Com dados reais não: um arquivo pode chegar ordenado por data, por agência ou pela própria classe, e um corte cru no meio separaria dois conjuntos que não representam a mesma população. O embaralhamento usa [semente fixa](#reprodutibilidade) para continuar reproduzível.
+
+**2. Cortar antes de normalizar.** O `splitCustomers` opera sobre clientes **brutos**, não sobre features já normalizadas. É o que permite medir a escala só no treino — se a normalização viesse antes, as estatísticas do teste já teriam vazado para dentro dela.
+
+```javascript
+const customers = shuffle(await source.read(), createRandom(SHUFFLE_SEED));
+
+const { trainCustomers, testCustomers } = splitCustomers(customers);   // 1. corta
+const scaler = source.fitScaler(trainCustomers);                       // 2. mede só o treino
 ```
 
 A segunda divisão — treino efetivo vs. validação — não aparece aqui: quem faz é o próprio `model.fit()`, via `validationSplit: 0.2`.
@@ -1118,9 +1135,16 @@ O `index.js` só executa o treino quando chamado direto (`node index.js`); ao se
 
 ```javascript
 if (require.main === module) {
-  main();
+  const run = async () => main(resolveSourceId(process.argv.slice(2)));
+
+  run().catch((error) => {
+    console.error(`\n${error.message}\n`);
+    process.exitCode = 1;
+  });
 }
 ```
+
+Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` virar rejeição e cair no mesmo `.catch` dos erros assíncronos — sem isso, `--source=xpto` imprimiria um *stack trace* no lugar da lista de fontes válidas.
 
 É isso que permite testar as partes sem treinar a rede. O que ele exporta:
 
@@ -1130,7 +1154,7 @@ if (require.main === module) {
 | `RISK_RULE_THRESHOLD` | constante | Corte `1.35` da regra que gera os rótulos |
 | `DECISION_THRESHOLD` | constante | Corte `0.5` do classificador |
 | `normalizeIncome`, `normalizeLatePayments` | função | Normalizações min-max individuais |
-| `toFeatureVector` | função | Cliente bruto → vetor de 4 features |
+| `toFeatureVector` | função | Cliente bruto → vetor de 4 features (sintético) |
 | `classify` | função | Probabilidade → `'ALTO RISCO'` / `'BAIXO RISCO'` |
 | `MODEL_DIR` | constante | Pasta `./model` onde o modelo é persistido |
 | `CSV_PATH`, `CSV_COLUMNS`, `CSV_LABEL_COLUMN`, `CSV_PRECISION` | constantes | Caminho, esquema e precisão do arquivo |
@@ -1142,9 +1166,22 @@ if (require.main === module) {
 | `ensureCsv` | função | Cria o CSV só se ele não existir → `{ path, created }` |
 | `readCustomersCsv` | função async | Lê o CSV via `tf.data.csv` → clientes brutos |
 | `loadDatasetCsv` | função async | CSV → `{ features, labels }` normalizados |
-| `splitDataset` | função | Divide em treino e teste |
+| `splitDataset` | função | Divide features já normalizadas em treino e teste |
+| `GERMAN_CSV_PATH`, `GERMAN_SOURCE_URL` | constantes | Arquivo local e endereço na UCI do dataset real |
+| `GERMAN_CODES`, `GERMAN_FEATURES`, `GERMAN_COLUMNS`, `GERMAN_PRECISION` | constantes | Códigos qualitativos, as 8 features e o esquema do CSV |
+| `parseDelimited` | função | Texto CSV → lista de objetos (parser mínimo) |
+| `toOrdinal` | função | Código `'A11'` → posição na lista documentada; lança se desconhecido |
+| `toGermanCustomer` | função | Linha da UCI → cliente no vocabulário do projeto |
+| `parseGermanCsv` | função | Texto bruto da UCI → clientes prontos |
+| `fitMinMaxScaler` | função | Clientes de treino → `{ featureNames, min, range }` |
+| `applyMinMaxScaler` | função | Scaler + cliente → vetor normalizado |
+| `SYNTHETIC_SOURCE`, `GERMAN_SOURCE`, `SOURCES` | objetos | As duas fontes de dados e o registro delas |
+| `DEFAULT_SOURCE_ID`, `resolveSourceId` | constante / função | Fonte padrão e leitura de `--source=` |
+| `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
+| `splitCustomers` | função | Divide clientes **brutos** em treino e teste |
+| `majorityBaseline` | função | Piso da acurácia: sempre chutar a classe majoritária |
 | `compileModel` | função | Aplica optimizer, loss e métricas a um modelo |
-| `buildModel` | função | Monta e compila a MLP |
+| `buildModel` | função | Monta e compila a MLP com o número de entradas da fonte |
 | `saveModel` | função async | Salva o modelo em `file://<dir>` com o otimizador |
 | `loadModel` | função async | Carrega de `model.json` e garante que vem compilado |
 | `predictRisk` | função | Cliente bruto → probabilidade, já liberando os tensores |
@@ -1161,63 +1198,71 @@ if (require.main === module) {
 | `formatTable` | função | Cabeçalho + linhas → tabela alinhada |
 | `formatThresholdComparison` | função | Candidatos → tabela comparativa de limiares |
 | `evaluateModel` | função | Roda `evaluate` e devolve `{ loss, accuracy }` |
-| `main` | função async | Pipeline completo: treina, avalia, salva, recarrega e prevê |
+| `main` | função async | Pipeline completo para uma fonte: treina, avalia, salva, recarrega e prevê |
 
 ---
 
 ## 📤 Exemplo de saída
 
 ```text
-Dataset lido de: /caminho/do/projeto/data/customers.csv
-Clientes lidos do CSV: 1200
+Fonte: German Credit — UCI/Statlog (Hofmann, 1994)
+Arquivo: /caminho/do/projeto/data/german-credit.csv
+Clientes lidos: 1000
+Features: checkingStatus, durationMonths, creditHistory, creditAmount, savingsStatus, employmentYears, installmentRate, age
 
-Test loss: 0.1439
-Test accuracy: 0.9750
+Total params: 289
+
+Test loss: 0.5175
+Test accuracy: 0.7500
+Baseline (classe majoritária): 0.7150
 
 Matriz de confusão (limiar 0.5):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      126 (TN) |       4 (FP)
-Real ALTO  |        2 (FN) |     108 (TP)
+Real BAIXO |      126 (TN) |      17 (FP)
+Real ALTO  |       33 (FN) |      24 (TP)
 
-Precision: 0.9643 - dos marcados como ALTO RISCO, quantos eram
-Recall:    0.9818 - dos que eram ALTO RISCO, quantos foram pegos
-F1-score:  0.9730 - média harmônica entre precision e recall
+Precision: 0.5854 - dos marcados como ALTO RISCO, quantos eram
+Recall:    0.4211 - dos que eram ALTO RISCO, quantos foram pegos
+F1-score:  0.4898 - média harmônica entre precision e recall
 
 Curva ROC (O = limiar 0.5, . = aleatório):
     TPR
-1.0 | O**************************************|
-    |                                 ...    |
-    |                           ......       |
-    |                     ......             |
-0.5 |               ......                   |
-    |         ......                         |
-    |   ......                               |
-    |*..                                     |
+1.0 |                            ************|
+    |                   *********     ...    |
+    |              *****           ...       |
+    |           ***             ...          |
+    |          *            ....             |
+    |        **          ...                 |
+0.5 |     O**         ...                    |
+    |    *         ...                       |
+    |   *      ....                          |
+    |       ...                              |
+    |  * ...                                 |
+    |**..                                    |
 0.0 +----------------------------------------+
     0.0                               FPR 1.0
-AUC: 0.9985
+AUC: 0.7497
 
 Ajuste do limiar (FP custa 1, FN custa 5):
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
-Padrão (0.5)   | 0.5000 | 0.0492 | 0.9576 |  6 |  5 |    31
-Youden (max J) | 0.4027 | 0.0492 | 0.9915 |  6 |  1 |    11
-Menor custo    | 0.2993 | 0.0738 | 1.0000 |  9 |  0 |     9
+Padrão (0.5)   | 0.5000 | 0.1189 | 0.4211 | 17 | 33 |   182
+Youden (max J) | 0.2708 | 0.3147 | 0.7368 | 45 | 15 |   120
+Menor custo    | 0.1669 | 0.5245 | 0.8947 | 75 |  6 |   105
 
-Matriz no limiar escolhido (0.2993):
+Matriz no limiar escolhido (0.1669):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      113 (TN) |       9 (FP)
-Real ALTO  |        0 (FN) |     118 (TP)
+Real BAIXO |       68 (TN) |      75 (FP)
+Real ALTO  |        6 (FN) |      51 (TP)
 
-Probabilidade de alto risco: 0.9999
+Probabilidade de alto risco: 0.8184
 Classificação: ALTO RISCO
-
 Modelo salvo em: /caminho/do/projeto/model
-Modelo recarregado — test loss: 0.1439
-Modelo recarregado — test accuracy: 0.9750
-Modelo recarregado — probabilidade: 0.9999
+Modelo recarregado — test loss: 0.5175
+Modelo recarregado — test accuracy: 0.7500
+Modelo recarregado — probabilidade: 0.8184
 Mesma predição do modelo original? sim
 ```
 
@@ -1228,10 +1273,16 @@ Os valores exatos não importam. O que se observa é o **comportamento**:
 - ✅ `accuracy` sobe;
 - ✅ a acurácia de teste fica próxima da de validação → o modelo **generalizou**;
 - ✅ as métricas antes e depois do `save`/`load` são **idênticas** → a persistência não perdeu nada;
-- ✅ a diagonal da matriz concentra as contagens, e `(TP + TN) / total` reproduz a acurácia;
-- ✅ precision e recall ficam próximas → o modelo não está trocando um erro pelo outro;
+- ✅ `(TP + TN) / total` reproduz a acurácia do `evaluate`;
 - ✅ a curva ROC se descola da diagonal e a AUC fica bem acima de `0.5` → o score **ordena** os clientes;
 - ✅ o limiar sugerido custa menos que o `0.5` herdado → havia margem na régua, não no modelo.
+
+E duas coisas que **só aparecem no dataset real**, e que são o motivo de ele estar aqui:
+
+- ⚠️ a acurácia (`0.7500`) mal supera o baseline da classe majoritária (`0.7150`) → **acurácia sozinha não diz se o modelo presta**;
+- ⚠️ precision (`0.5854`) e recall (`0.4211`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade.
+
+No dataset sintético, os mesmos números ficam em `0.9875` de acurácia contra `0.5375` de baseline, com AUC `0.9997` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real.
 
 ---
 
@@ -1250,8 +1301,8 @@ O `dispose` do modelo é separado: libera os pesos, que não estão na lista de 
 Os tensores de curta duração (entrada, predição, métricas do `evaluate`) não aparecem nessa lista porque `predictRisk` e `evaluateModel` já os liberam internamente — quem chama recebe apenas números:
 
 ```javascript
-const predictRisk = (model, customer) => {
-  const input = tf.tensor2d([toFeatureVector(customer)]);
+const predictRisk = (model, customer, toVector = toFeatureVector) => {
+  const input = tf.tensor2d([toVector(customer)]);
   const prediction = model.predict(input);
   const probability = prediction.dataSync()[0];
 
@@ -1263,6 +1314,8 @@ const predictRisk = (model, customer) => {
 
 Em um script curto isso é apenas boa prática; em uma API de longa duração, esquecer o `dispose` vaza memória a cada requisição. Para blocos intermediários, `tf.tidy()` faz a limpeza automaticamente.
 
+> 📌 Ao final do `main` ainda restam ~29 tensores vivos. Eles **não** são dos objetos acima: vêm do estado interno do `fit` e do otimizador Adam, que o tfjs mantém e não expõe para descarte. O ponto do `dispose` é liberar o que o código possui — o que ele não possui, só some com o processo.
+
 ---
 
 ## ⚠️ Limitações conhecidas
@@ -1271,14 +1324,22 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 
 | Simplificação                                                  | Por que importaria em produção                              |
 | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| Normalização com constantes fixas em vez de estatísticas do treino | Vazamento de dados                                       |
+| Categorias codificadas como **ordinais**, não *one-hot*          | Impõe uma ordem que os dados nem sempre têm — `savingsStatus` mistura magnitude com "desconhecido", e `creditHistory` [inverte](#a-ordem-que-os-dados-nem-sempre-têm) |
+| 8 das 20 colunas do German Credit                                | As 12 restantes são categóricas sem ordem natural; usá-las exige *one-hot* |
+| Dataset real com apenas **1.000 linhas**                         | Pouco dado para uma rede neural — parte da variação entre execuções vem daí, e é o que motiva regularização |
 | CSV sem validação de esquema, faixas ou valores ausentes        | Dado real vem com coluna faltando, texto onde deveria haver número e `NaN` |
-| Split por fatiamento (`slice`) sem embaralhar antes             | Seguro aqui (dados aleatórios), perigoso em dados ordenados  |
-| Rótulos gerados por regra determinística e sem ruído            | Dados reais têm ruído, sobreposição de classes e desbalanceamento |
 | Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado |
-| Custos de FP e FN fixos no código (`1` e `5`)                    | Em produção vêm de ticket médio, taxa de recuperação e margem — não de constante |
-| Limiar fixo em `0.5`                                            | O corte deveria vir do custo real de falso positivo/negativo |
-| Modelo salvo sem versionar as constantes de normalização        | Pesos novos com pré-processamento antigo → training-serving skew |
+| Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
+| Modelo salvo sem versionar o **scaler** junto                    | Pesos novos com pré-processamento antigo → training-serving skew |
+| Split simples em vez de **estratificado**                        | Com 30% de positivos, um sorteio ruim desequilibra o hold-out |
+| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande |
+
+Duas limitações da versão anterior **deixaram de existir** com o dataset real:
+
+| Era limitação | O que resolveu |
+| ------------- | -------------- |
+| ~~Normalização com constantes fixas em vez de estatísticas do treino~~ | `fitMinMaxScaler`, [medido só no treino](#agora-a-normalização-precisa-ser-medida) |
+| ~~Split por fatiamento sem embaralhar antes~~ | `shuffle` com [semente fixa](#reprodutibilidade) antes do corte |
 
 ---
 
@@ -1292,9 +1353,11 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 
 **Modelo e dados**
 - [x] ~~carregar dados de um CSV~~ — feito, veja [Carregando dados de um CSV](#-carregando-dados-de-um-csv);
-- [ ] usar um dataset real de crédito;
+- [x] ~~usar um dataset real de crédito~~ — feito, veja [Dataset real: German Credit](#-dataset-real-german-credit);
+- [ ] codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as 12 colunas restantes;
 - [ ] adicionar ruído e desbalanceamento aos dados sintéticos;
 - [ ] regularização L2 e dropout;
+- [ ] validação cruzada e split estratificado;
 - [ ] comparar arquiteturas diferentes.
 
 **Produto**
@@ -1312,11 +1375,14 @@ Content-Type: application/json
 ```
 
 ```json
-{ "income": 3500, "debtRatio": 0.72, "latePayments": 3, "creditUtilization": 0.88 }
+{
+  "checkingStatus": 0, "durationMonths": 48, "creditHistory": 1, "creditAmount": 9000,
+  "savingsStatus": 0, "employmentYears": 1, "installmentRate": 4, "age": 24
+}
 ```
 
 ```json
-{ "riskProbability": 0.9142, "classification": "HIGH_RISK" }
+{ "riskProbability": 0.8184, "classification": "HIGH_RISK" }
 ```
 
 ```mermaid
@@ -1338,17 +1404,21 @@ flowchart LR
 
 O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização** do treino. Divergência entre treino e inferência (*training-serving skew*) é uma das falhas mais comuns em ML em produção.
 
+Com o dataset real isso ficou mais concreto: a escala não é mais um punhado de constantes no código, e sim um `scaler` **medido** durante o treino. Ou ele é salvo junto com os pesos, ou o serviço normaliza diferente do que a rede aprendeu.
+
 ---
 
 ## 📚 Conceitos demonstrados
 
-`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
+`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Fairness` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
 
 ---
 
 ## 🔒 Aviso
 
-Projeto criado para **estudo de redes neurais e TensorFlow.js**. Os dados são sintéticos e o modelo **não deve ser usado para decisões financeiras reais**.
+Projeto criado para **estudo de redes neurais e TensorFlow.js**. O modelo **não deve ser usado para decisões financeiras reais**.
+
+O dataset real é de **1994**, tem 1.000 registros de um único banco alemão e reflete as práticas de concessão daquele contexto — inclusive as discriminatórias. Ele serve para estudar o método, não para tirar conclusões sobre crédito hoje.
 
 Modelos de crédito em produção exigem, entre outros pontos: dados representativos, validação estatística, análise de viés, explicabilidade, governança, monitoramento contínuo, segurança e conformidade regulatória.
 
@@ -1360,6 +1430,7 @@ Modelos de crédito em produção exigem, entre outros pontos: dados representat
 - *Deep Learning with Python* — François Chollet
 - [TensorFlow.js — Documentação](https://www.tensorflow.org/js)
 - [`@tensorflow/tfjs-node`](https://www.npmjs.com/package/@tensorflow/tfjs-node)
+- Hofmann, H. (1994). **Statlog (German Credit Data)**. UCI Machine Learning Repository. [DOI: 10.24432/C5NC77](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data) — CC BY 4.0
 
 ---
 
