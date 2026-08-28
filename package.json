@@ -8,6 +8,8 @@
     "start": "node index.js",
     "start:ordinal": "node index.js --source=german-ordinal",
     "start:synthetic": "node index.js --source=synthetic",
+    "cv": "node index.js --cv",
+    "cv:synthetic": "node index.js --source=synthetic --cv",
     "fetch:german": "node scripts/fetch-german.js",
     "seed": "node scripts/seed.js",
     "test": "node --test",
@@ -33,7 +35,10 @@
     "educational",
     "one-hot-encoding",
     "fairness",
-    "algorithmic-bias"
+    "algorithmic-bias",
+    "cross-validation",
+    "stratified-sampling",
+    "bias-mitigation"
   ],
   "author": {
     "name": "felpsdev03",

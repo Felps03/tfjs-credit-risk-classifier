@@ -70,8 +70,15 @@ const {
   germanFeatureNames,
   toGermanVector,
   isFemale,
+  toAuditRows,
   summarizeGroup,
+  thresholdFor,
   auditByGroup,
+  rateThreshold,
+  fitGroupThresholds,
+  summarizeDecisions,
+  formatMitigation,
+  resolveMitigation,
   approvalRatio,
   formatAudit,
   GERMAN_ORDINAL_SOURCE,
@@ -92,6 +99,15 @@ const {
   createRandom,
   shuffle,
   splitCustomers,
+  stratifiedSplitCustomers,
+  stratifiedFolds,
+  summarize,
+  resolveFolds,
+  CV_FOLDS,
+  crossValidate,
+  formatCrossValidation,
+  rocFromScores,
+  TRAINING,
   majorityBaseline,
 } = require('../index');
 
@@ -2922,6 +2938,318 @@ describe('splitCustomers', () => {
   });
 });
 
+describe('stratifiedSplitCustomers', () => {
+  // 100 clientes, 30 inadimplentes — a proporção do German Credit.
+  const clientes = Array.from({ length: 100 }, (ignorado, i) => ({
+    id: i,
+    risk: i % 10 < 3 ? 1 : 0,
+  }));
+
+  it('dados clientes desbalanceados, quando divididos, então as duas partes mantêm a proporção', () => {
+    // Given / When
+    const { trainCustomers, testCustomers } = stratifiedSplitCustomers(clientes);
+    const taxa = (rows) => rows.filter(({ risk }) => risk === 1).length / rows.length;
+
+    // Then — 30% dos dois lados, sem depender de sorte nenhuma
+    assert.equal(taxa(trainCustomers), 0.3);
+    assert.equal(taxa(testCustomers), 0.3);
+  });
+
+  it('dados clientes, quando divididos em 80/20, então os tamanhos batem e nada se perde', () => {
+    // Given / When
+    const { trainCustomers, testCustomers } = stratifiedSplitCustomers(clientes);
+
+    // Then
+    assert.equal(trainCustomers.length, 80);
+    assert.equal(testCustomers.length, 20);
+    assert.equal(trainCustomers.length + testCustomers.length, clientes.length);
+  });
+
+  it('dados clientes divididos, quando as partes são comparadas, então não há sobreposição', () => {
+    // Given / When
+    const { trainCustomers, testCustomers } = stratifiedSplitCustomers(clientes);
+    const treino = new Set(trainCustomers.map(({ id }) => id));
+
+    // Then
+    assert.deepEqual(testCustomers.filter(({ id }) => treino.has(id)), []);
+  });
+
+  it('dada a ordem embaralhada, quando dividida, então ela é PRESERVADA dentro de cada parte', () => {
+    // Given — `fit` reserva os últimos 20% do treino para validação antes
+    // de embaralhar. Se a estratificação agrupasse por rótulo, essa fatia
+    // sairia quase toda de uma classe só.
+    const { trainCustomers, testCustomers } = stratifiedSplitCustomers(clientes);
+    const crescente = (rows) => rows.every(({ id }, i) => i === 0 || id > rows[i - 1].id);
+
+    // Then
+    assert.ok(crescente(trainCustomers));
+    assert.ok(crescente(testCustomers));
+  });
+
+  it('dado o mesmo conjunto, quando comparado com o corte cru, então a proporção do teste é mais fiel', () => {
+    // Given — um conjunto em que o corte cru cai mal de propósito: os
+    // inadimplentes estão concentrados no fim
+    const concentrados = Array.from({ length: 100 }, (ignorado, i) => ({
+      id: i,
+      risk: i >= 70 ? 1 : 0,
+    }));
+
+    // When
+    const cru = splitCustomers(concentrados).testCustomers;
+    const estratificado = stratifiedSplitCustomers(concentrados).testCustomers;
+    const taxa = (rows) => rows.filter(({ risk }) => risk === 1).length / rows.length;
+
+    // Then — o corte cru entrega um teste 100% inadimplente; o
+    // estratificado entrega os 30% que o conjunto tem
+    assert.equal(taxa(cru), 1);
+    assert.equal(taxa(estratificado), 0.3);
+  });
+
+  it('dada uma proporção customizada, quando dividido, então respeita a proporção', () => {
+    // Given / When
+    const { trainCustomers } = stratifiedSplitCustomers(clientes, 0.5);
+
+    // Then
+    assert.equal(trainCustomers.length, 50);
+  });
+});
+
+describe('stratifiedFolds', () => {
+  const clientes = Array.from({ length: 100 }, (ignorado, i) => ({
+    risk: i % 10 < 3 ? 1 : 0,
+  }));
+
+  it('dados clientes, quando distribuídos em dobras, então cada dobra recebe a mesma proporção', () => {
+    // Given / When
+    const dobras = stratifiedFolds(clientes, 5);
+
+    // Then — 20 clientes por dobra, 6 deles inadimplentes
+    [0, 1, 2, 3, 4].forEach((dobra) => {
+      const rows = clientes.filter((ignorado, i) => dobras[i] === dobra);
+
+      assert.equal(rows.length, 20);
+      assert.equal(rows.filter(({ risk }) => risk === 1).length, 6);
+    });
+  });
+
+  it('dadas as dobras, quando somadas, então cada cliente aparece em exatamente uma', () => {
+    // Given / When
+    const dobras = stratifiedFolds(clientes, 5);
+
+    // Then
+    assert.equal(dobras.length, clientes.length);
+    assert.ok(dobras.every((dobra) => Number.isInteger(dobra) && dobra >= 0 && dobra < 5));
+  });
+
+  it('dado um número de dobras que não divide a classe, quando distribuído, então a diferença é de no máximo uma linha', () => {
+    // Given — 30 inadimplentes em 4 dobras: 8, 8, 7, 7
+    const dobras = stratifiedFolds(clientes, 4);
+    const positivos = [0, 1, 2, 3].map((dobra) =>
+      clientes.filter((cliente, i) => dobras[i] === dobra && cliente.risk === 1).length);
+
+    // Then
+    assert.ok(Math.max(...positivos) - Math.min(...positivos) <= 1);
+  });
+});
+
+describe('summarize', () => {
+  it('dados valores, quando resumidos, então trazem média, erro padrão e amplitude', () => {
+    // Given / When
+    const resumo = summarize([2, 4, 6, 8]);
+
+    // Then
+    assert.equal(resumo.mean, 5);
+    assert.equal(resumo.lowest, 2);
+    assert.equal(resumo.highest, 8);
+    // desvio amostral = 2.5820..., erro padrão = desvio / sqrt(4)
+    assert.ok(Math.abs(resumo.standardError - 1.2910) < 0.0001);
+  });
+
+  it('dado um valor só, quando resumido, então o erro padrão é 0 e não NaN', () => {
+    // Given — uma medição não tem do que discordar; a variância amostral
+    // seria uma divisão por zero
+    const resumo = summarize([0.75]);
+
+    // Then
+    assert.equal(resumo.mean, 0.75);
+    assert.equal(resumo.standardError, 0);
+  });
+
+  it('dados valores idênticos, quando resumidos, então o erro padrão é exatamente 0', () => {
+    // Given / When / Then
+    assert.equal(summarize([3, 3, 3]).standardError, 0);
+  });
+});
+
+describe('resolveFolds', () => {
+  it('dado nenhum argumento, quando resolvido, então a validação cruzada não roda', () => {
+    // Given / When / Then — `null` é "não pedida", diferente de "0 dobras"
+    assert.equal(resolveFolds([]), null);
+    assert.equal(resolveFolds(['--source=german']), null);
+  });
+
+  it('dado --cv sem valor, quando resolvido, então usa o padrão do projeto', () => {
+    // Given / When / Then
+    assert.equal(resolveFolds(['--cv']), CV_FOLDS);
+  });
+
+  it('dado --cv com valor, quando resolvido, então usa o número pedido', () => {
+    // Given / When / Then
+    assert.equal(resolveFolds(['--cv=10']), 10);
+    assert.equal(resolveFolds(['--source=synthetic', '--cv=3']), 3);
+  });
+
+  it('dado um k impossível, quando resolvido, então recusa em vez de rodar', () => {
+    // Given — uma dobra não é validação cruzada, e 2.5 dobras não existe
+    assert.throws(() => resolveFolds(['--cv=1']), /inteiro entre 2 e 20/);
+    assert.throws(() => resolveFolds(['--cv=2.5']), /inteiro entre 2 e 20/);
+    assert.throws(() => resolveFolds(['--cv=999']), /Valor inválido/);
+    assert.throws(() => resolveFolds(['--cv=abc']), /Valor inválido/);
+  });
+});
+
+describe('rocFromScores', () => {
+  it('dados scores e rótulos, quando a curva é traçada, então não precisa de modelo nenhum', () => {
+    // Given — separação perfeita, sem tensor e sem rede
+    const { auc, positives, negatives } = rocFromScores([0.9, 0.8, 0.2, 0.1], [1, 1, 0, 0]);
+
+    // Then
+    assert.equal(auc, 1);
+    assert.equal(positives, 2);
+    assert.equal(negatives, 2);
+  });
+
+  it('dada uma ordenação invertida, quando a curva é traçada, então a AUC é 0', () => {
+    // Given / When / Then
+    assert.equal(rocFromScores([0.9, 0.8, 0.2, 0.1], [0, 0, 1, 1]).auc, 0);
+  });
+
+  it('dada uma classe só, quando a curva é traçada, então não há divisão por zero', () => {
+    // Given — sem negativos o FPR é indefinido
+    const curva = rocFromScores([0.9, 0.1], [1, 1]);
+
+    // Then
+    assert.equal(curva.auc, 0);
+    assert.equal(curva.negatives, 0);
+  });
+
+  it('dado um modelo, quando computeRocCurve roda, então delega para a mesma função', () => {
+    // Given — a curva do modelo é a curva dos scores dele
+    const tf = require('@tensorflow/tfjs-node');
+    const model = buildModel(2, { l2: 0, dropout: 0 });
+    const xTest = tf.tensor2d([[0, 0], [1, 1], [0, 1], [1, 0]]);
+    const yTest = tf.tensor2d([[0], [1], [1], [0]]);
+
+    const scores = tf.tidy(() =>
+      Array.from(model.predict(xTest).reshape([-1]).dataSync()));
+
+    // When / Then
+    assert.equal(
+      computeRocCurve(model, xTest, yTest).auc,
+      rocFromScores(scores, [0, 1, 1, 0]).auc,
+    );
+
+    tf.dispose([xTest, yTest]);
+    model.dispose();
+  });
+});
+
+describe('crossValidate', () => {
+  // Fonte mínima em memória: o contrato é o mesmo das três reais, mas
+  // sem disco, sem escala e com dois números por cliente.
+  const fonteEmMemoria = () => {
+    const customers = Array.from({ length: 60 }, (ignorado, index) => ({
+      a: index % 2,
+      b: (index % 5) / 5,
+      // 21 inadimplentes em 60 linhas: 3 dobras recebem 7 cada, e 5
+      // recebem 20 clientes cada. Divisível de propósito — é o que
+      // permite afirmar que o baseline sai IDÊNTICO em todas.
+      risk: index % 20 < 7 ? 1 : 0,
+    }));
+
+    return {
+      id: 'memoria',
+      label: 'Fonte de teste',
+      csvPath: '(memória)',
+      featureNames: ['a', 'b'],
+      regularization: { l2: 0, dropout: 0 },
+      ensure: () => ({ created: false }),
+      read: async () => customers,
+      fitScaler: () => null,
+      toVector: (customer) => [customer.a, customer.b],
+    };
+  };
+
+  it('dadas k dobras, quando validadas, então cada cliente é testado exatamente uma vez', async () => {
+    // Given / When
+    const resultado = await crossValidate(fonteEmMemoria(), { folds: 3 });
+
+    // Then
+    assert.equal(resultado.folds.length, 3);
+    assert.equal(
+      resultado.folds.reduce((total, { testSize }) => total + testSize, 0),
+      60,
+    );
+    assert.equal(resultado.outOfSample.scores.filter(Number.isFinite).length, 60);
+  });
+
+  it('dadas dobras estratificadas, quando validadas, então o baseline é o mesmo em todas', async () => {
+    // Given — é exatamente isto que a estratificação compra: a régua
+    // para de mudar de dobra para dobra
+    const { folds } = await crossValidate(fonteEmMemoria(), { folds: 3 });
+
+    // Then
+    assert.equal(new Set(folds.map(({ baseline }) => baseline)).size, 1);
+  });
+
+  it('dado o resumo, quando lido, então traz média e erro padrão de cada métrica', async () => {
+    // Given / When
+    const { summary } = await crossValidate(fonteEmMemoria(), { folds: 2 });
+
+    // Then
+    ['baseline', 'accuracy', 'auc', 'cost'].forEach((metrica) => {
+      assert.ok(Number.isFinite(summary[metrica].mean), metrica);
+      assert.ok(Number.isFinite(summary[metrica].standardError), metrica);
+    });
+  });
+
+  it('dada uma fonte sem atributo protegido, quando validada, então não há auditoria', async () => {
+    // Given / When
+    const resultado = await crossValidate(fonteEmMemoria(), { folds: 2 });
+
+    // Then
+    assert.equal(resultado.audit, null);
+    assert.equal(resultado.mitigated, null);
+  });
+
+  it('dado o resultado, quando formatado, então a tabela traz uma linha por dobra, a média e o erro', async () => {
+    // Given
+    const resultado = await crossValidate(fonteEmMemoria(), { folds: 2 });
+
+    // When
+    const texto = formatCrossValidation(resultado);
+
+    // Then
+    assert.ok(texto.includes('Dobra'));
+    assert.ok(texto.includes('Média'));
+    assert.ok(texto.includes('Erro'));
+    assert.ok(texto.includes('AUC sobre o dataset inteiro'));
+  });
+});
+
+describe('TRAINING', () => {
+  it('dada a configuração de treino, quando lida, então é uma só para os dois caminhos', () => {
+    // Given — se o fluxo principal e a validação cruzada treinassem
+    // diferente, a estimativa cruzada mediria outro modelo
+    assert.deepStrictEqual(TRAINING, {
+      epochs: 40,
+      batchSize: 32,
+      validationSplit: 0.2,
+      patience: 5,
+    });
+  });
+});
+
 describe('majorityBaseline', () => {
   it('dados rótulos majoritariamente negativos, quando medido, então devolve a fatia da classe majoritária', () => {
     // Given — 7 baixos e 3 altos, como no German Credit
@@ -3280,6 +3608,290 @@ describe('isFemale / summarizeGroup / auditByGroup', () => {
     assert.ok(texto.includes('Mulheres'));
     assert.ok(texto.includes('Homens'));
     assert.ok(texto.includes('regra dos 4/5'));
+  });
+});
+
+// ==================================================
+// Mitigação da disparidade
+// ==================================================
+describe('rateThreshold', () => {
+  it('dada uma fração, quando o limiar é calibrado, então ele marca essa fração', () => {
+    // Given — quatro scores, metade deve ser marcada
+    const scores = [0.6, 0.9, 0.7, 0.8];
+
+    // When
+    const limiar = rateThreshold(scores, 0.5);
+
+    // Then — o corte cai no MEIO entre 0.8 (marcado) e 0.7 (de fora)
+    assert.equal(limiar, 0.75);
+    assert.equal(scores.filter((score) => score >= limiar).length, 2);
+  });
+
+  it('dada a fração 0, quando calibrada, então o limiar é inalcançável', () => {
+    // Given / When — marcar ninguém é uma resposta legítima
+    const limiar = rateThreshold([0.1, 0.9], 0);
+
+    // Then — nenhuma probabilidade chega a Infinity
+    assert.equal(limiar, Infinity);
+    assert.equal([0.1, 0.9].filter((score) => score >= limiar).length, 0);
+  });
+
+  it('dada a fração 1, quando calibrada, então o limiar marca todo mundo', () => {
+    // Given / When
+    const limiar = rateThreshold([0.1, 0.9], 1);
+
+    // Then — 0 é alcançado por qualquer probabilidade
+    assert.equal(limiar, 0);
+    assert.equal([0.1, 0.9].filter((score) => score >= limiar).length, 2);
+  });
+
+  it('dados scores empatados na fronteira, quando calibrado, então a fração vira um piso', () => {
+    // Given — o ponto médio de dois empatados é o próprio valor, e o
+    // `>=` não tem como separar um do outro
+    const scores = [0.9, 0.5, 0.5, 0.1];
+
+    // When
+    const limiar = rateThreshold(scores, 0.5);
+
+    // Then — pediu 2, marcou 3, e isso é o comportamento documentado
+    assert.equal(limiar, 0.5);
+    assert.equal(scores.filter((score) => score >= limiar).length, 3);
+  });
+
+  it('dada uma lista vazia, quando calibrada, então o limiar é inalcançável', () => {
+    // Given / When / Then — não há como marcar fração de nada
+    assert.equal(rateThreshold([], 0.5), Infinity);
+  });
+});
+
+describe('fitGroupThresholds', () => {
+  const cliente = (personalStatus, risk) => ({ [GERMAN_AUDIT_COLUMN]: personalStatus, risk });
+  const mulher = GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+  // Duas mulheres com score alto, dois homens com score baixo: no limiar
+  // único elas são marcadas e eles não.
+  const customers = [
+    cliente(mulher, 1), cliente(mulher, 0),
+    cliente(0, 1), cliente(0, 0),
+  ];
+  const scores = [0.9, 0.8, 0.4, 0.1];
+
+  it('dado um grupo marcado demais, quando calibrado, então ele recebe o limiar mais alto', () => {
+    // Given / When — o limiar único marca 2 de 4, ou seja 50%
+    const limiares = fitGroupThresholds(customers, scores, 0.5);
+
+    // Then — cada grupo passa a marcar 1 de 2, e para isso o corte das
+    // mulheres tem de subir e o dos homens tem de descer
+    assert.ok(limiares.women > 0.5);
+    assert.ok(limiares.men < 0.5);
+  });
+
+  it('dados os limiares calibrados, quando aplicados ao próprio conjunto, então as taxas se igualam', () => {
+    // Given — este é o caso em que a paridade sai por CONSTRUÇÃO: o
+    // conjunto calibrado e o auditado são o mesmo. É por isso que o
+    // projeto calibra no treino e audita no teste.
+    const limiares = fitGroupThresholds(customers, scores, 0.5);
+
+    // When
+    const auditoria = auditByGroup(customers, scores, limiares);
+
+    // Then
+    assert.equal(auditoria.women.flaggedRate, auditoria.men.flaggedRate);
+    assert.equal(auditoria.approvalRatio, 1);
+  });
+
+  it('dado um conjunto sem mulheres, quando calibrado, então o limiar delas é inalcançável', () => {
+    // Given — grupo vazio não tem quantil; marcar ninguém é a única
+    // resposta que não inventa dado
+    const somenteHomens = [cliente(0, 1), cliente(0, 0)];
+
+    // When
+    const limiares = fitGroupThresholds(somenteHomens, [0.9, 0.1], 0.5);
+
+    // Then
+    assert.equal(limiares.women, Infinity);
+    assert.ok(Number.isFinite(limiares.men));
+  });
+
+  it('dada a mitigação, quando calibrada, então nenhum score muda', () => {
+    // Given — a correção é de LIMIAR, não de modelo: os mesmos scores
+    // entram nas duas políticas
+    const copia = [...scores];
+
+    // When
+    fitGroupThresholds(customers, scores, 0.5);
+
+    // Then
+    assert.deepStrictEqual(scores, copia);
+  });
+});
+
+describe('thresholdFor / auditoria com limiar por grupo', () => {
+  const cliente = (personalStatus, risk) => ({ [GERMAN_AUDIT_COLUMN]: personalStatus, risk });
+  const mulher = GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+  it('dado um número, quando consultado, então vale para os dois grupos', () => {
+    // Given / When / Then
+    assert.equal(thresholdFor(0.5, true), 0.5);
+    assert.equal(thresholdFor(0.5, false), 0.5);
+  });
+
+  it('dado um par, quando consultado, então cada grupo recebe o seu', () => {
+    // Given / When / Then
+    assert.equal(thresholdFor({ women: 0.8, men: 0.2 }, true), 0.8);
+    assert.equal(thresholdFor({ women: 0.8, men: 0.2 }, false), 0.2);
+  });
+
+  it('dados limiares por grupo, quando auditados, então a razão sobe e os dois limiares ficam registrados', () => {
+    // Given — todas as mulheres marcadas, nenhum homem: razão 0
+    const customers = [
+      cliente(mulher, 0), cliente(mulher, 0),
+      cliente(0, 0), cliente(0, 0),
+    ];
+    const scores = [0.9, 0.6, 0.4, 0.1];
+
+    // When
+    const antes = auditByGroup(customers, scores, 0.5);
+    const depois = auditByGroup(customers, scores, { women: 0.7, men: 0.3 });
+
+    // Then
+    assert.equal(antes.approvalRatio, 0);
+    assert.equal(depois.approvalRatio, 1);
+    assert.deepStrictEqual(depois.thresholds, { women: 0.7, men: 0.3 });
+  });
+
+  it('dado um limiar único, quando auditado, então os dois limiares registrados são iguais', () => {
+    // Given / When
+    const customers = [cliente(mulher, 0), cliente(0, 0)];
+    const { thresholds } = auditByGroup(customers, [0.9, 0.1], 0.5);
+
+    // Then
+    assert.deepStrictEqual(thresholds, { women: 0.5, men: 0.5 });
+  });
+
+  it('dados clientes e scores, quando as linhas de auditoria são montadas, então trazem risco, score e grupo', () => {
+    // Given / When
+    const linhas = toAuditRows([cliente(mulher, 1), cliente(0, 0)], [0.9, 0.1]);
+
+    // Then
+    assert.deepStrictEqual(linhas, [
+      { risk: 1, score: 0.9, female: true },
+      { risk: 0, score: 0.1, female: false },
+    ]);
+  });
+});
+
+describe('summarizeDecisions', () => {
+  const cliente = (personalStatus, risk) => ({ [GERMAN_AUDIT_COLUMN]: personalStatus, risk });
+  const mulher = GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+  // Uma mulher ruim com score alto, uma boa com score alto, um homem ruim
+  // com score baixo e um bom com score baixo.
+  const customers = [
+    cliente(mulher, 1), cliente(mulher, 0),
+    cliente(0, 1), cliente(0, 0),
+  ];
+  const scores = [0.9, 0.8, 0.2, 0.1];
+
+  it('dado um limiar único, quando as decisões são resumidas, então acurácia e custo saem dos erros', () => {
+    // Given / When — marca as duas mulheres: 1 acerto e 1 falso positivo;
+    // deixa os dois homens passar: 1 falso negativo e 1 acerto
+    const resumo = summarizeDecisions(customers, scores, 0.5);
+
+    // Then
+    assert.equal(resumo.falsePositives, 1);
+    assert.equal(resumo.falseNegatives, 1);
+    assert.equal(resumo.accuracy, 0.5);
+    assert.equal(resumo.cost, FALSE_POSITIVE_COST + FALSE_NEGATIVE_COST);
+  });
+
+  it('dado o custo assimétrico, quando calculado, então o falso negativo pesa cinco vezes mais', () => {
+    // Given — o mesmo conjunto, agora sem nenhuma marcação: os dois maus
+    // pagadores escapam
+    const resumo = summarizeDecisions(customers, scores, 1);
+
+    // Then
+    assert.equal(resumo.falsePositives, 0);
+    assert.equal(resumo.falseNegatives, 2);
+    assert.equal(resumo.cost, 2 * FALSE_NEGATIVE_COST);
+    assert.equal(resumo.cost, 10);
+  });
+
+  it('dado um limiar por grupo, quando resumido, então cada grupo é cortado no seu', () => {
+    // Given — com um corte alto para elas e baixo para eles, os mesmos
+    // scores produzem a decisão CERTA nos quatro casos
+    const resumo = summarizeDecisions(customers, scores, { women: 0.85, men: 0.15 });
+
+    // Then
+    assert.equal(resumo.falsePositives, 0);
+    assert.equal(resumo.falseNegatives, 0);
+    assert.equal(resumo.accuracy, 1);
+    assert.equal(resumo.cost, 0);
+  });
+
+  it('dados custos próprios, quando informados, então substituem os do laboratório', () => {
+    // Given / When — invertendo a assimetria, o falso positivo é que dói
+    const resumo = summarizeDecisions(customers, scores, 0.5, {
+      falsePositive: 10,
+      falseNegative: 1,
+    });
+
+    // Then
+    assert.equal(resumo.cost, 11);
+  });
+});
+
+describe('formatMitigation', () => {
+  const cliente = (personalStatus, risk) => ({ [GERMAN_AUDIT_COLUMN]: personalStatus, risk });
+  const mulher = GERMAN_AUDIT_CODES.indexOf(FEMALE_CODE);
+
+  it('dadas duas políticas, quando formatadas, então a tabela mostra limiares, razão e custo', () => {
+    // Given
+    const customers = [
+      cliente(mulher, 0), cliente(mulher, 0),
+      cliente(0, 0), cliente(0, 0),
+    ];
+    const scores = [0.9, 0.6, 0.4, 0.1];
+    const politica = (label, threshold) => ({
+      label,
+      audit: auditByGroup(customers, scores, threshold),
+      decisions: summarizeDecisions(customers, scores, threshold),
+    });
+
+    // When
+    const texto = formatMitigation([
+      politica('Limiar único', 0.5),
+      politica('Limiar por grupo', { women: 0.7, men: 0.3 }),
+    ]);
+
+    // Then
+    assert.ok(texto.includes('Limiar único'));
+    assert.ok(texto.includes('Limiar por grupo'));
+    assert.ok(texto.includes('0.7000'));
+    assert.ok(texto.includes('0.3000'));
+    assert.ok(texto.includes('1.000'));  // a razão depois da mitigação
+  });
+});
+
+describe('resolveMitigation', () => {
+  it('dado nenhum argumento, quando resolvido, então a mitigação fica desligada', () => {
+    // Given / When / Then — o padrão é NÃO usar o atributo protegido
+    assert.equal(resolveMitigation([]), false);
+    assert.equal(resolveMitigation(['--source=german']), false);
+  });
+
+  it('dado --mitigar, quando resolvido, então a mitigação liga', () => {
+    // Given / When / Then
+    assert.equal(resolveMitigation(['--mitigar']), true);
+    assert.equal(resolveMitigation(['--source=german', '--mitigar']), true);
+  });
+
+  it('dado --mitigar com valor, quando resolvido, então recusa em vez de adivinhar', () => {
+    // Given — `--mitigar=false` LIGARIA a política se a presença bastasse,
+    // e é exatamente o oposto do que quem escreveu isso queria
+    assert.throws(() => resolveMitigation(['--mitigar=false']), /sem valor/);
+    assert.throws(() => resolveMitigation(['--mitigar=0']), /sem valor/);
+    assert.throws(() => resolveMitigation(['--mitigar=true']), /sem valor/);
   });
 });
 

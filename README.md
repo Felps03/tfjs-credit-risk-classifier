@@ -62,6 +62,8 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 - [Precision, recall e F1-score](#-precision-recall-e-f1-score)
 - [Curva ROC e AUC](#-curva-roc-e-auc)
 - [Ajuste do limiar de decisão](#-ajuste-do-limiar-de-decisão)
+- [Validação cruzada e split estratificado](#-validação-cruzada-e-split-estratificado)
+- [Mitigação da disparidade](#-mitigação-da-disparidade)
 - [Inferência](#-inferência)
 - [Persistência do modelo](#-persistência-do-modelo)
 - [API do módulo](#-api-do-módulo)
@@ -124,12 +126,30 @@ npm run fetch:german     # rebaixa o dataset real da UCI e reconverte
 npm run seed             # regenera o dataset sintético a partir do código
 ```
 
+Uma execução mede **uma** divisão. Para a estimativa com barra de erro — k treinos, cada cliente pontuado por um modelo que não o viu — existe um comando à parte:
+
+```bash
+npm run cv               # 5 dobras estratificadas no dataset real
+npm run cv:synthetic     # o mesmo no sintético
+node index.js --cv=10    # escolhendo o k
+```
+
+É [essa medição](#-validação-cruzada-e-split-estratificado) que responde "quanto o modelo acerta?" sem depender de qual sorteio calhou.
+
 Os dois freios contra *overfitting* são ajustáveis pela linha de comando, para que o efeito possa ser **visto** em vez de lido:
 
 ```bash
 node index.js --l2=0 --dropout=0   # a rede sem regularização nenhuma
 node index.js --dropout=0.5        # só dropout, e forte
 ```
+
+E a disparidade medida pela auditoria pode ser **corrigida** em vez de só reportada, com um limiar por grupo calibrado no treino:
+
+```bash
+npm start -- --mitigar             # a decisão passa a ler o sexo do cliente
+```
+
+A comparação entre as duas políticas aparece em toda execução, com ou sem a flag; o que a flag muda é qual delas decide. O padrão é **desligado**, e [a seção sobre mitigação explica por quê](#-mitigação-da-disparidade) — com números.
 
 Cada fonte declara a **sua** dose — o dataset real vem com os freios ligados, o sintético não —, e as flags sobrescrevem o que a fonte declara. Cada execução imprime `Diferença treino − teste` logo abaixo das acurácias. É o termômetro do *overfitting*, e é o número que [a regularização existe para encolher](#-regularização-l2-e-dropout).
 
@@ -210,12 +230,25 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede:
 | `germanFeatureNames` / `toGermanVector` | **57** entradas em one-hot e **19** em ordinal, nomes `campo=código`, vetor do mesmo tamanho dos nomes, numéricas primeiro e bloco categórico só com `0` e `1` |
 | Atributo protegido | **Nenhuma feature vem do sexo**, a coluna existe no CSV mas não no modelo, e o scaler não a mede |
 | `isFemale` / `summarizeGroup` / `auditByGroup` | Identificação do grupo, taxa real separada da marcada, FNR sem `NaN`, paridade quando o tratamento é igual e razão infinita quando um grupo não tem aprovação |
+| `rateThreshold` | Fração pedida vira fração marcada, corte no ponto médio, listas vazias e frações `0`/`1` nos extremos, e **empate na fronteira que transforma a fração em piso** |
+| `fitGroupThresholds` | O grupo marcado demais recebe o limiar mais alto, grupo vazio vira limiar inalcançável, **os scores não são tocados** e calibrar no conjunto auditado devolve paridade por construção |
+| `thresholdFor` / auditoria por grupo | Número vale para os dois, par vale um para cada, a razão sobe com limiares por grupo e os dois limiares ficam registrados na auditoria |
+| `summarizeDecisions` | Acurácia e custo a partir dos erros, o falso negativo pesando 5×, corte por grupo acertando os quatro casos e custos próprios substituindo os do laboratório |
+| `formatMitigation` | Limiares, razão e custo das duas políticas na mesma tabela |
+| `resolveMitigation` | Ausência é desligado, `--mitigar` liga e **`--mitigar=false` lança em vez de ligar a política que o usuário quis desligar** |
 | `createGermanSource` | As duas variantes diferem só na codificação e a ordinal é alcançável por `--source` |
 | `parseGermanCsv`       | Texto bruto da UCI → clientes prontos, ponta a ponta |
 | `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as 21 colunas declaradas e nenhum valor não-finito |
 | `fitMinMaxScaler` / `applyMinMaxScaler` | Mínimo e amplitude, coluna constante sem divisão por zero, valor fora da faixa **não** cortado, ordem do vetor e **ausência de vazamento do teste para a escala** |
 | `createRandom` / `shuffle` | Mesma semente → mesma sequência, faixa `[0, 1)`, permutação, entrada não modificada e embaralhamento reproduzível |
 | `splitCustomers`       | Proporções e ausência de sobreposição, agora sobre clientes brutos |
+| `stratifiedSplitCustomers` | Proporção de classes **idêntica** nos dois lados, tamanhos, ausência de sobreposição, **ordem preservada dentro de cada parte** e um caso em que o corte cru entrega um teste 100% inadimplente |
+| `stratifiedFolds` | Mesma proporção em cada dobra, cada cliente em exatamente uma, e diferença de no máximo uma linha quando o k não divide a classe |
+| `summarize` | Média, erro padrão e amplitude; uma amostra só dá erro `0` e não `NaN`; valores idênticos dão erro exatamente `0` |
+| `resolveFolds` | Ausência é `null`, `--cv` usa o padrão, `--cv=k` usa o pedido, e `k = 1`, `k = 2.5`, `k = 999` ou `abc` **lançam** |
+| `rocFromScores` | Curva sem modelo nenhum, AUC `1` e `0` nos extremos, classe única sem divisão por zero e `computeRocCurve` delegando para ela |
+| `crossValidate` | Cada cliente testado exatamente uma vez, **baseline idêntico em todas as dobras**, resumo com média e erro padrão, e fonte sem atributo protegido não produzindo auditoria |
+| `TRAINING` | A configuração de treino é **uma só** para o fluxo principal e a validação cruzada |
 | `majorityBaseline`     | Piso da classe majoritária com maioria negativa, positiva e empate |
 | `SOURCES` / `resolveSourceId` | Padrão, seleção por flag, fonte inválida, **contrato cumprido por todas as fontes**, tamanho do vetor, escala medida e mensagem acionável quando o CSV real falta |
 | Regularização por fonte | Sintético com os freios **desligados**, German com as constantes do laboratório, as duas variantes diferindo **só** na codificação e a linha de comando vencendo a fonte na mesclagem |
@@ -790,7 +823,7 @@ Três leituras disso, todas úteis:
 
 3. **Correção e desempenho são eixos separados.** One-hot continua sendo a representação certa para `purpose`, mesmo sem mexer no número. Afirmar uma ordem que não existe é errado independentemente de a métrica notar.
 
-Um detalhe que o protocolo torna visível: **na divisão fixa do projeto, a variante ordinal vai melhor** — AUC `0.7445` ± 0.0008 contra `0.7302` ± 0.0015 do one-hot, uma diferença de várias vezes o erro padrão. Isso não contradiz a tabela acima; confirma o que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. Uma diferença que some ao trocar a divisão é uma propriedade **daquele sorteio**, não das codificações, e tratá-la como resultado seria exatamente o erro que a média de 15 sementes existe para evitar.
+Um detalhe que o protocolo torna visível: **na divisão fixa do projeto, a variante ordinal vai melhor** — AUC `0.7496` ± 0.0013 contra `0.7387` ± 0.0013 do one-hot, uma diferença de várias vezes o erro padrão. Isso não contradiz a tabela acima; confirma o que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. Uma diferença que some ao trocar a divisão é uma propriedade **daquele sorteio**, não das codificações, e tratá-la como resultado seria exatamente o erro que a média de 15 sementes existe para evitar.
 
 > 🔬 Para reproduzir a comparação: `npm start` roda one-hot e `npm run start:ordinal` roda a codificação anterior sobre as mesmas 19 colunas. A variante ordinal existe no código **só para isso** — para que a frase "one-hot é melhor" possa ser medida em vez de repetida.
 
@@ -830,12 +863,14 @@ E aqui é preciso ser honesto sobre o que o número diz e o que não diz. As mul
 
 > 🔬 A [regularização](#-regularização-l2-e-dropout) não mexeu nisso: nas mesmas 15 divisões, a razão é `0.880` ± 0.047 sem os freios e `0.933` ± 0.052 com eles — indistinguíveis. Disparidade não é *overfitting*, e não sai pelo mesmo remédio.
 
-Então há discriminação? Depende do critério, e é isso que torna o caso interessante:
+Então há discriminação? Depende do critério, e é isso que torna o caso interessante. Auditando os **1.000** clientes de uma vez, com validação cruzada de 5 dobras e 10 repetições — o único recorte grande o bastante para separar efeito de ruído:
 
-- **Paridade demográfica** (mesma taxa de aprovação nos dois grupos) → falha: `0.791` fica no limite dos `0.80`.
-- **Calibração / odds equalizadas** (mesma precisão e mesmo recall nos dois grupos) → passa razoavelmente: os FNR ficam próximos.
+- **Paridade demográfica** (mesma taxa de aprovação nos dois grupos) → **falha**: razão `0.8258` ± 0.0172, abaixo de `0.80` em 3 das 10 repetições.
+- **Igualdade de erros** (mesmo recall nos dois grupos) → **passa**: o inadimplente escapa em `7,8%` ± 0,9 dos casos entre as mulheres e `9,1%` ± 0,5 entre os homens.
 
 Os dois critérios são incompatíveis entre si quando as taxas-base diferem — é um resultado provado, não uma limitação deste projeto. Escolher qual vale é uma decisão de política, não de engenharia.
+
+> ⚖️ Medir e parar aqui deixaria o problema documentado e intacto. A seção [Mitigação da disparidade](#-mitigação-da-disparidade) age sobre o número — leva a razão de `0.8258` a `1.0140` sem retreinar nada — e mede o que isso cobra.
 
 O que o laboratório entrega é a **medição**. Quem decide o que fazer com ela precisa de mais contexto do que um `README` tem: por que as taxas-base diferem (o dataset é de 1994, quando crédito para mulheres casadas dependia de autorização do marido na Alemanha), se a diferença é causal ou reflexo de discriminação histórica já embutida nos rótulos, e o que a lei aplicável exige.
 
@@ -848,47 +883,51 @@ Média de **25 execuções sobre a divisão que o projeto fixa** — a mesma que
 | Métrica | Sintético | German Credit |
 | ------- | --------: | ------------: |
 | Entradas da rede | 4 | 57 |
-| Baseline (classe majoritária) | `0.8250` | `0.7150` |
-| Test accuracy | `0.9508` ± 0.0057 | `0.7148` ± 0.0033 |
-| **Ganho sobre o baseline** | **+13 pts** | **0,0 pt** |
-| AUC | `0.9771` ± 0.0003 | `0.7302` ± 0.0015 |
-| Recall no limiar `0.5` | `0.7190` ± 0.0323 | `0.4028` ± 0.0065 |
-| Custo no limiar `0.5` | `59.0` ± 6.8 | `193.2` ± 1.8 |
-| Custo no limiar escolhido | `18.4` ± 0.7 | `106.6` ± 0.5 |
+| Baseline (classe majoritária) | `0.8423` | `0.7000` |
+| Test accuracy | `0.9416` ± 0.0067 | `0.7088` ± 0.0026 |
+| **Ganho sobre o baseline** | **+9,9 pts** | **+0,9 pt** |
+| AUC | `0.9733` ± 0.0007 | `0.7387` ± 0.0013 |
+| Recall no limiar `0.5` | `0.6295` ± 0.0427 | `0.4053` ± 0.0073 |
+| Custo no limiar `0.5` | `70.4` ± 8.1 | `201.0` ± 1.9 |
+| Custo no limiar escolhido | `20.1` ± 0.9 | `105.4` ± 0.7 |
 
 Duas linhas resumem a diferença entre um laboratório e um problema real.
 
-O **ganho sobre o baseline é zero.** Nesta divisão, o modelo treinado no German Credit acerta `0.7148` contra `0.7150` de quem chuta "bom pagador" para todos os 200 clientes do teste, sem olhar coluna nenhuma. Um empate, dentro de qualquer margem que se queira aplicar. E o **recall no limiar `0.5`** cai de `0.72` para `0.40`: o corte herdado deixa passar seis em cada dez maus pagadores.
+O **ganho sobre o baseline quase desaparece**: `0.7088` contra `0.7000` de quem chuta "bom pagador" para todos os 200 clientes do teste, sem olhar coluna nenhuma. Menos de um ponto — e o **recall no limiar `0.5`** cai de `0.63` para `0.41`: o corte herdado deixa passar seis em cada dez maus pagadores.
 
-Um relatório que parasse na acurácia concluiria que o modelo é inútil — e estaria errado. A **AUC de `0.7302`** diz o contrário: ele *ordena* os clientes bem acima do acaso, e o que falta não é sinal, é **régua**. No limiar escolhido, o mesmo modelo, sem retreinar, derruba o custo de `193.2` para `106.6`.
+Um relatório que parasse na acurácia concluiria que o modelo é inútil — e estaria errado por dois motivos independentes.
 
-Este é o resultado mais útil do projeto inteiro, e ele precisou de três seções anteriores para ser dizível: **acurácia empatada com o baseline e AUC de `0.73` ao mesmo tempo**. Um número diz "não aprendeu nada", o outro diz "aprendeu, e o corte é que está no lugar errado". Só o segundo está certo — e nenhuma das duas conclusões seria visível sem a outra métrica ao lado.
+O primeiro é a **AUC de `0.7387`**: ele *ordena* os clientes bem acima do acaso, e o que falta não é sinal, é **régua**. No limiar escolhido, o mesmo modelo, sem retreinar, derruba o custo de `201.0` para `105.4`.
+
+O segundo é que **esta divisão é ruim**. A [validação cruzada](#-validação-cruzada-e-split-estratificado) mede `0.7475` ± 0.0017 contra o mesmo baseline `0.7000` — quase cinco pontos de ganho, não um. Os dois números estão certos e respondem perguntas diferentes; o honesto é o segundo, e ele só existe porque a pergunta foi feita a k divisões em vez de uma.
+
+Este é o resultado mais útil do projeto inteiro, e ele precisou de quatro seções anteriores para ser dizível: **acurácia quase empatada com o baseline, AUC de `0.74`, e um ganho real de cinco pontos que uma única divisão escondeu**. Cada número diz uma coisa diferente sobre o mesmo modelo, e nenhuma das conclusões seria visível sem as outras métricas ao lado.
 
 O dataset sintético não estava errado — ele estava **fácil**, e continua sendo o mais fácil dos dois mesmo depois do [ruído injetado](#-geração-dos-dados-sintéticos). A diferença é que agora dá para dizer *quanto* mais fácil, e por quê: no sintético o ruído é conhecido e limitado a 2 pontos irredutíveis; no German Credit ninguém sabe onde fica o teto.
 
 ### Uma divisão não é o dataset
 
-Os números acima descrevem **a divisão que o projeto fixa** (semente `42`). Vale saber o quanto eles dependem dela. Sorteando 15 divisões diferentes:
+Os números acima descrevem **a divisão que o projeto fixa** (semente `42`). Vale saber o quanto eles dependem dela. Sorteando 15 divisões diferentes, todas [estratificadas](#-validação-cruzada-e-split-estratificado):
 
 | | Sintético | German Credit |
 | --- | ---: | ---: |
-| Baseline médio | `0.8431` ± 0.0078 | `0.7027` ± 0.0080 |
-| Acurácia média | `0.9392` ± 0.0063 | `0.7420` ± 0.0050 |
-| Pior / melhor divisão | `0.9000` / `0.9792` | `0.7000` / `0.7700` |
-| AUC média | `0.9604` ± 0.0036 | `0.7721` ± 0.0064 |
-| Pior / melhor divisão | `0.9290` / `0.9816` | `0.7216` / `0.8055` |
+| Baseline | `0.8423` **em todas** | `0.7000` **em todas** |
+| Acurácia média | `0.9477` ± 0.0043 | `0.7467` ± 0.0058 |
+| Pior / melhor divisão | `0.9212` / `0.9710` | `0.7150` / `0.7900` |
+| AUC média | `0.9716` ± 0.0036 | `0.7781` ± 0.0083 |
+| Pior / melhor divisão | `0.9382` / `0.9903` | `0.7210` / `0.8318` |
 
 Três coisas ficam claras de uma vez:
 
-**A divisão importa mais que a inicialização.** A AUC do German Credit vai de `0.72` a `0.81` conforme o sorteio — oito pontos de amplitude, contra `± 0.0015` entre inicializações de peso na mesma divisão. O acaso do corte domina o acaso do treino por uma ordem de grandeza.
+**A divisão importa mais que a inicialização.** A AUC do German Credit vai de `0.72` a `0.83` conforme o sorteio — onze pontos de amplitude, contra `± 0.0013` entre inicializações de peso na mesma divisão. O acaso do corte domina o acaso do treino por uma ordem de grandeza.
 
-**Até o baseline se move.** Ele varia de `0.6500` a `0.7600` entre divisões, porque a proporção de maus pagadores que cai no conjunto de teste muda a cada sorteio. Quando a própria régua oscila 11 pontos, comparar acurácias de uma execução só não significa nada.
+**O baseline parou de se mexer, e isso foi conquistado.** Ele sai `0.7000` nas quinze divisões, não em média: em cada uma. Com o corte cru que o projeto usava antes, o mesmo experimento entregava de `0.6500` a `0.7600`, porque a proporção de maus pagadores no teste mudava a cada sorteio — e comparar acurácias contra uma régua que oscila onze pontos não significa nada. Foi o [split estratificado](#-validação-cruzada-e-split-estratificado) que travou o número.
 
-**A semente `42` calhou de ser ruim.** Na média das divisões o modelo real acerta `0.7420` contra `0.7027` de baseline — um ganho real de 4 pontos. Na divisão que o projeto fixa, esse ganho some por completo. **Os dois números estão certos**; eles respondem perguntas diferentes: "o que esperar de uma divisão qualquer?" e "o que esta divisão dá?".
+**A semente `42` calhou de ser ruim** — e não por pouco. Na média das divisões o modelo real acerta `0.7467`; na divisão fixa, `0.7088`, abaixo da **pior** das quinze. **Os dois números estão certos**; eles respondem perguntas diferentes: "o que esperar de uma divisão qualquer?" e "o que esta divisão dá?".
 
-Isso é um resultado sobre o **tamanho do dataset**, não sobre o modelo: 200 linhas de teste, das quais ~60 são positivas, não sustentam três casas decimais. É o argumento concreto para os dois itens que faltam na lista de evoluções — **validação cruzada** e **split estratificado** —, que existem exatamente para trocar "a estimativa de um sorteio" pela "média de vários".
+Isso é um resultado sobre o **tamanho do dataset**, não sobre o modelo: 200 linhas de teste, das quais 60 são positivas, não sustentam três casas decimais. É o argumento concreto para a [validação cruzada](#-validação-cruzada-e-split-estratificado), que troca "a estimativa de um sorteio" pela "média de vários" — e que, medida 10 vezes, concorda com a média das 15 divisões até a terceira casa: `0.7475` ± 0.0017 contra `0.7467` ± 0.0058.
 
-E é por isso que a semente continua fixa. Sabendo que existe uma divisão que dá `0.7700`, a tentação de procurá-la é real; uma semente congelada no código é a defesa mais barata contra escolher o resultado depois de ver os resultados.
+E é por isso que a semente continua fixa. Sabendo que existe uma divisão que dá `0.7900`, a tentação de procurá-la é real; uma semente congelada no código é a defesa mais barata contra escolher o resultado depois de ver os resultados.
 
 ### Reprodutibilidade
 
@@ -1582,6 +1621,263 @@ O `DECISION_THRESHOLD = 0.5` continua sendo o corte da inferência: a escolha do
 
 ---
 
+## 🔁 Validação cruzada e split estratificado
+
+Todo número deste projeto até aqui saiu de **uma** divisão: 800 clientes para treinar, 200 para medir. Isso tem dois problemas, e nenhum deles é o modelo.
+
+**A régua se mexe.** Um corte cru depois do embaralhamento acerta a proporção de inadimplentes *em média* e erra em qualquer execução específica. Com 30% de positivos e 200 linhas de teste, o sorteio entregava entre `0.6500` e `0.7600` de [baseline da classe majoritária](#-matriz-de-confusão) — e é contra esse número que toda acurácia deste projeto é lida. Onze pontos de oscilação na régua entram direto na conclusão.
+
+**A incerteza não aparece.** "Acurácia `0.7088`" parece uma medida. Não é: é uma amostra de tamanho 1 de uma distribuição cuja largura ninguém viu.
+
+As duas coisas têm conserto, e são independentes.
+
+### Estratificar: parar de sortear a régua
+
+Estratificar é preservar a proporção de classes nos dois lados do corte:
+
+```javascript
+const stratifiedSplitCustomers = (customers, trainRatio = 0.8) => {
+  const training = new Set();
+
+  [...new Set(customers.map(({ risk }) => risk))].forEach((label) => {
+    const indexes = customers
+      .map((customer, index) => ({ risk: customer.risk, index }))
+      .filter((row) => row.risk === label);
+
+    indexes
+      .slice(0, Math.floor(indexes.length * trainRatio))
+      .forEach(({ index }) => training.add(index));
+  });
+
+  return {
+    trainCustomers: customers.filter((ignored, index) => training.has(index)),
+    testCustomers: customers.filter((ignored, index) => !training.has(index)),
+  };
+};
+```
+
+O efeito é imediato e exato. Nas mesmas 15 divisões que antes davam de `0.6500` a `0.7600`:
+
+| Baseline do conjunto de teste | Corte cru | Estratificado |
+| --- | ---: | ---: |
+| German Credit, 15 divisões | `0.7027` ± 0.0080, variando `0.6500`–`0.7600` | **`0.7000` em todas as 15** |
+| Sintético, 15 divisões | `0.8431` ± 0.0078, variando `0.7833`–`0.9000` | **`0.8423` em todas as 15** |
+
+O `0.7000` não é média: é o valor de **cada** divisão. A régua parou de se mexer, e a variação que sobra na acurácia passa a ser do modelo, não do sorteio.
+
+> ⚠️ **Um detalhe de implementação que é um bug esperando para acontecer.** A função devolve os clientes na ordem em que eles chegaram, não agrupados por rótulo. O motivo: `fit` reserva os **últimos 20%** do treino para validação **antes** de embaralhar. Um conjunto ordenado por classe daria uma fatia de validação quase toda de um rótulo só — e o `val_loss` que governa o *early stopping* estaria medindo outra coisa. Há um teste que trava a ordem.
+
+E o que a estratificação **não** faz: ela preserva a proporção de *inadimplentes*, não a de *mulheres*. As taxas-base por sexo continuam variando entre divisões (`35,2%` ± 1,3 contra `27,7%` ± 0,5), e estratificar pelo atributo protegido seria outra decisão — com outras implicações, porque significaria usar a coluna que o modelo não recebe para montar o experimento.
+
+### Validar cruzado: k estimativas em vez de uma
+
+A validação cruzada divide o dataset em k dobras, treina k vezes, e cada cliente é pontuado **exatamente uma vez** por um modelo que não o viu treinar. As dobras também são estratificadas, então todas as k medidas usam a mesma régua.
+
+```bash
+npm run cv                       # 5 dobras no German Credit
+node index.js --cv=10            # 10 dobras
+node index.js --source=synthetic --cv
+```
+
+```text
+Fonte: German Credit — UCI/Statlog (Hofmann, 1994), one-hot
+Validação cruzada estratificada: 5 dobras
+
+Dobra | Treino | Teste | Baseline | Acurácia |      AUC | Limiar | Custo
+------+--------+-------+----------+----------+----------+--------+------
+1     |    800 |   200 |   0.7000 |   0.7400 |   0.7855 | 0.1777 |    92
+2     |    800 |   200 |   0.7000 |   0.6900 |   0.7065 | 0.0983 |   113
+3     |    800 |   200 |   0.7000 |   0.7800 |   0.7954 | 0.1560 |   105
+4     |    800 |   200 |   0.7000 |   0.7300 |   0.7779 | 0.2100 |    95
+5     |    800 |   200 |   0.7000 |   0.7800 |   0.8230 | 0.2261 |    84
+Média |        |       |   0.7000 |   0.7440 |   0.7776 |        |  97.8
+Erro  |        |       | ± 0.0000 | ± 0.0169 | ± 0.0193 |        | ± 5.1
+
+AUC sobre o dataset inteiro (curva única, score fora da amostra): 0.7714
+```
+
+A dobra 2 acerta `0.6900` — **abaixo do baseline**. A dobra 5 acerta `0.7800`. São o mesmo código, o mesmo dataset e a mesma configuração; a diferença de nove pontos é inteiramente o sorteio de quais 200 clientes ficaram de fora. Reportar qualquer uma delas sozinha seria reportar ruído com quatro casas decimais.
+
+Dois detalhes que não são decorativos:
+
+- **O scaler é remedido em cada dobra.** Reaproveitar uma escala ajustada no dataset inteiro vazaria o teste de cada dobra para dentro do treino — e o erro seria invisível, porque o número sairia *melhor*.
+- **A AUC do dataset inteiro não é a média das AUCs.** `0.7714` vem de uma curva única, montada com os 1.000 scores fora da amostra; `0.7776` ± 0.0193 é a média de cinco curvas independentes. As duas respondem perguntas diferentes e não têm por que coincidir.
+
+### O que isso mudou na conclusão do projeto
+
+Repetindo a validação cruzada **10 vezes**, com sementes diferentes — 50 treinos:
+
+| | Divisão fixa (semente `42`) | Validação cruzada |
+| --- | ---: | ---: |
+| Baseline | `0.7000` | `0.7000` |
+| Acurácia | `0.7088` ± 0.0026 | **`0.7475`** ± 0.0017 |
+| **Ganho sobre o baseline** | **+0,9 pt** | **+4,8 pts** |
+| AUC | `0.7387` ± 0.0013 | `0.7806` ± 0.0018 |
+| Custo `5:1` no limiar escolhido | `105.4` ± 0.7 | `96.8` ± 0.6 |
+
+**A semente `42` é uma divisão ruim** — e não por pouco: nas 15 divisões sorteadas para conferir, a pior deu `0.7150`, ainda acima dela. Duas medições independentes concordam entre si e discordam dela: a média de 15 divisões dá `0.7467` ± 0.0058 e a validação cruzada dá `0.7475` ± 0.0017.
+
+Isso **muda uma conclusão anterior deste README**. Com a divisão fixa e o corte cru, o modelo empatava com o baseline, e o texto dizia que o ganho era zero. Com a régua estabilizada e a estimativa feita como se deve, o ganho existe: **+4,8 pontos**, ou seja, cerca de 48 clientes a mais classificados corretamente em cada 1.000. O que continua verdadeiro é a lição maior — a acurácia sozinha não diz isso, e foram a [AUC](#-curva-roc-e-auc) e o [ajuste do limiar](#-ajuste-do-limiar-de-decisão) que mostraram onde estava o problema.
+
+> 🔬 A semente continua fixa no código. Sabendo que existem divisões que dão `0.7900`, a tentação de procurá-las é real, e uma semente congelada é a defesa mais barata contra escolher o resultado depois de ver os resultados. O que mudou é que agora existe um comando — `npm run cv` — que responde a pergunta certa sem depender dela.
+
+### O que ela permitiu medir
+
+O ganho maior não foi na acurácia: foi na [auditoria de disparidade](#a-coluna-que-o-modelo-não-recebeu). Com um hold-out, ela roda sobre **64 mulheres** e a razão de aprovação balança de `0.66` a `1.30` conforme o sorteio. Com validação cruzada, **todos os 1.000 clientes** têm um score fora da amostra, e a mesma auditoria roda sobre **310 mulheres** de uma vez.
+
+É essa a diferença entre relatar um número e medir um efeito — e é o que torna a [mitigação](#-mitigação-da-disparidade) verificável em vez de plausível.
+
+**O preço:** k treinos em vez de um. Para 1.000 linhas e uma rede de 1.073 parâmetros isso é meio minuto; é por isso que a validação cruzada é um **comando separado**, e não o caminho padrão do `npm start` — que continua servindo para ver o pipeline inteiro rodar, com matriz, curva e limiar, em uma passada só.
+
+---
+
+## ⚖️ Mitigação da disparidade
+
+A [auditoria](#a-coluna-que-o-modelo-não-recebeu) mede a diferença entre os grupos e para aí. Isso deixa o problema **documentado e intacto** — e um relatório que só descreve o próprio viés não é diferente, na prática, de não ter medido nada.
+
+Esta seção age sobre o número. O lugar mais barato de agir é **depois** do modelo, no limiar: nenhum peso muda, nenhum treino é refeito, os *scores* continuam exatamente os mesmos. O que se move é **onde cada grupo é cortado**.
+
+```mermaid
+flowchart LR
+    S["🔢 Scores<br/>o modelo não muda"] --> P{"Política<br/>de limiar"}
+    P -->|"padrão"| U["✂️ Limiar único<br/>o mesmo corte para todos"]
+    P -->|"--mitigar"| G["✂️ Limiar por grupo<br/>calibrado no TREINO"]
+    U --> A["⚖️ Razão de aprovação<br/>0.826 ± 0.017"]
+    G --> B["⚖️ Razão de aprovação<br/>1.014 ± 0.013"]
+    B --> C["💰 Preço<br/>FNR das mulheres 7,8% → 11,2%<br/>custo 5:1 +2,3%"]
+
+    classDef score fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
+    classDef check fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
+    classDef step  fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#1e293b
+    classDef price fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+
+    class S score
+    class P check
+    class U,G,A,B step
+    class C price
+```
+
+### O mecanismo
+
+O limiar único marca uma fração `r` do conjunto inteiro. A mitigação pede que **cada grupo marque essa mesma fração `r`** — e para isso calcula, dentro de cada grupo, o corte que produz aquela taxa:
+
+```javascript
+const rateThreshold = (scores, rate) => {
+  const sorted = [...scores].sort((first, second) => second - first);
+  const marked = Math.round(rate * sorted.length);
+
+  if (marked <= 0) return Infinity;   // marcar ninguém
+  if (marked >= sorted.length) return 0;   // marcar todo mundo
+
+  return (sorted[marked - 1] + sorted[marked]) / 2;
+};
+
+const fitGroupThresholds = (customers, scores, threshold) => {
+  const rows = toAuditRows(customers, scores);
+  const rate = safeDivide(
+    rows.filter(({ score }) => score >= threshold).length,
+    rows.length,
+  );
+  const thresholdOf = (female) => rateThreshold(
+    rows.filter((row) => row.female === female).map(({ score }) => score),
+    rate,
+  );
+
+  return { women: thresholdOf(true), men: thresholdOf(false) };
+};
+```
+
+O corte cai no **ponto médio** entre a última linha marcada e a primeira que fica de fora. Escolher uma das pontas faria um *score* novo, chegando exatamente sobre a fronteira, decidir a própria sorte por um empate. Empate de verdade não tem saída: se os dois vizinhos têm o mesmo *score*, o ponto médio é esse valor e o `>=` marca os dois — a fração pedida vira um **piso**, e há teste fixando esse comportamento.
+
+> ⚠️ Os clientes passados a `fitGroupThresholds` precisam ser os de **treino**. Calibrar no mesmo conjunto que será auditado devolve paridade por construção: a razão sai exatamente `1.000` — há um teste que fixa isso — e não significa absolutamente nada, porque a régua foi ajustada às respostas da prova. Calibrando fora, o número honesto é `1.0140` ± 0.0129.
+
+### O que ele corrige
+
+Auditar 200 clientes não dá para responder a essa pergunta — o `N` feminino do *hold-out* é 64. Então a medição usa **validação cruzada de 5 dobras, 10 repetições**: todo cliente recebe um *score* de um modelo que não o viu no treino, e a auditoria roda sobre os **1.000** de uma vez. Os limiares de cada dobra saem das outras quatro.
+
+| | Sem mitigação | Limiar por grupo |
+| --- | ---: | ---: |
+| **Razão de aprovação** | `0.8258` ± 0.0172 | **`1.0140`** ± 0.0129 |
+| Distância da paridade (`\|razão − 1\|`) | `0.1742` ± 0.0172 | **`0.0339`** ± 0.0078 |
+| Repetições abaixo de `0.80` | **3 de 10** | **0 de 10** |
+| Mulheres marcadas ALTO | 70,6% ± 1,3 | 65,9% ± 1,0 |
+| Homens marcados ALTO | 64,5% ± 1,0 | 66,4% ± 1,0 |
+| Acurácia | `0.5840` ± 0.0071 | `0.5814` ± 0.0066 |
+
+A correção **funciona**: a distância da paridade cai cinco vezes, e as três repetições que violavam a regra dos quatro quintos deixam de violar. A acurácia não se mexe — a diferença entre as duas colunas é menor que um erro padrão.
+
+### O que ele custa
+
+Nenhuma dessas duas linhas aparece na razão de aprovação, e as duas são o preço:
+
+| | Sem mitigação | Limiar por grupo |
+| --- | ---: | ---: |
+| **FNR mulheres** (mau pagador que escapa) | `0.0780` ± 0.0086 | **`0.1119`** ± 0.0071 |
+| **FNR homens** | `0.0911` ± 0.0049 | `0.0838` ± 0.0057 |
+| Custo `5:1` | `519.6` ± 3.4 | `531.4` ± 3.6 |
+
+Antes da mitigação os dois grupos tinham a **mesma** taxa de inadimplente não pego (`7,8%` contra `9,1%`, indistinguíveis). Depois, a das mulheres sobe para `11,2%` e a dos homens cai para `8,4%`. A conta de erro sobe 2,3%.
+
+Isso não é defeito de implementação — é o **teorema da impossibilidade** aparecendo em números. As taxas-base reais diferem (35,2% das mulheres do arquivo são inadimplentes contra 27,7% dos homens), e com taxas-base diferentes **paridade demográfica e igualdade de erros não podem valer ao mesmo tempo**. Igualar a aprovação exige desigualar o erro. O laboratório não escolhe qual dos dois critérios importa; ele mostra que escolher um é abrir mão do outro.
+
+### Por que o padrão é desligado
+
+Dois motivos, e o segundo é medido.
+
+**Primeiro: a correção precisa LER o atributo protegido.** Para aplicar um corte diferente às mulheres é preciso saber quem são as mulheres — a mesma coluna que o modelo foi proibido de ver volta, agora na hora de decidir. Não há como escapar disso: corrigir uma diferença entre grupos exige conhecer o grupo. Em vários países usar sexo na decisão de crédito é ilegal **mesmo quando a intenção declarada é reduzir a diferença**. Ligar isso é decisão de política, não de engenharia, e o projeto não a toma sozinho.
+
+**Segundo: na divisão que o projeto usa, a correção não transfere.** Repetindo a medição sobre o recorte real de `npm start` — 200 clientes auditados, 15 divisões:
+
+| | Sem mitigação | Limiar por grupo |
+| --- | ---: | ---: |
+| Razão de aprovação | `0.9482` ± 0.0433 | `1.1614` ± 0.0947 |
+| Distância da paridade | `0.1351` ± 0.0276 | **`0.2341`** ± 0.0831 |
+| Divisões fora de `0.80`–`1.25` | 3 de 15 | **5 de 15** |
+| FNR mulheres | `0.0726` ± 0.0125 | `0.1077` ± 0.0154 |
+| Custo `5:1` | `95.5` ± 3.5 | `98.8` ± 3.7 |
+
+**A mitigação piora o número que ela existe para melhorar.** E o motivo não é o método: é o tamanho da amostra. O limiar feminino é um quantil estimado sobre ~250 mulheres do treino e aplicado a ~64 do teste, num ponto de operação em que 65% de todo mundo é marcado — a taxa de *aprovação* que a regra dos 4/5 divide fica na casa dos 35%, e a razão de dois números pequenos balança muito. A correção acerta a direção e erra a dose, com sinal trocado: `1.16` em vez de `0.95`.
+
+> 🔬 A conclusão não é "mitigação não funciona". É que **uma correção só pode ser aplicada onde pode ser medida** — e 64 pessoas não medem uma taxa com precisão suficiente para calibrar nada. Com os 1.000 clientes da validação cruzada, o mesmo código funciona.
+
+Rodar com a política ligada é um argumento de distância:
+
+```bash
+npm start -- --mitigar
+```
+
+```text
+Mitigação (limiares calibrados no TREINO, auditados no teste):
+Política         | Limiar M | Limiar H | Razão aprov. | Acurácia | Custo
+-----------------+----------+----------+--------------+----------+------
+Limiar único     |   0.1246 |   0.1246 |        0.708 |   0.5350 |   105
+Limiar por grupo |   0.1399 |   0.1168 |        0.981 |   0.5300 |   110
+Política ativa: limiar por grupo — a decisão lê o sexo do cliente.
+```
+
+As duas linhas aparecem **sempre**, com ou sem a flag. A tabela sem a coluna de custo contaria meia história: a razão de aprovação sempre melhora quando se ajusta o limiar para ela — a pergunta é o que se perdeu no caminho.
+
+### Por que a disparidade existe
+
+A auditoria mostra *que* o modelo separa os grupos sem ter recebido a coluna. Dá para medir **quanto** o sexo vaza pelas outras 19: basta treinar a mesma rede, com a mesma configuração, para prever o **sexo** a partir das features que ela recebe.
+
+**AUC = `0.6990` ± 0.0105.** Não é um vazamento total (`1.0`), mas está longe do acaso (`0.5`): idade, moradia, tempo de emprego e valor do crédito carregam o sinal, e a rede o recompõe sozinha. É *fairness through unawareness* falhando com um número em cima.
+
+E o viés é **estimável fora da amostra** — o que explica por que o método funciona quando há dado suficiente. A diferença média de *score* entre os grupos é `0.0342` ± 0.0016 no treino e `0.0323` ± 0.0018 fora dele: praticamente o mesmo valor. O que não transfere na divisão pequena não é o viés; é o **quantil** usado para corrigi-lo.
+
+### O que isso não conserta
+
+O limiar por grupo iguala a taxa de aprovação. Ele não toca em nada do que está **antes**:
+
+- **Os rótulos.** Se o `risk = 1` de 1994 já reflete decisões de crédito enviesadas, o alvo do treino vem contaminado — e nenhuma política de corte conserta um rótulo errado.
+- **As taxas-base.** A diferença de 7,5 pontos entre os grupos continua no arquivo depois da mitigação, porque ela é do dado, não do modelo.
+- **Os proxies.** A AUC de `0.699` para prever sexo não muda: o modelo continua reconstruindo o atributo. A mitigação compensa o efeito no fim da linha, não remove a causa.
+- **A escolha do critério.** Igualar aprovação foi uma decisão. Igualar FNR seria outra, produziria outra tabela, e as duas não podem valer juntas.
+
+> 🔬 E nada disso sai por acidente de outra escolha: a [regularização](#-regularização-l2-e-dropout), medida nas mesmas 15 divisões, [não move a razão de aprovação](#um-número-só-não-basta). Disparidade não é *overfitting*, e não sai pelo mesmo remédio.
+
+---
+
 ## 🔮 Inferência
 
 Um cliente novo passa pela **mesma normalização** usada no treino:
@@ -1684,8 +1980,10 @@ O `index.js` só executa o treino quando chamado direto (`node index.js`); ao se
 ```javascript
 if (require.main === module) {
   const argv = process.argv.slice(2);
-  const run = async () =>
-    main(resolveSourceId(argv), resolveRegularization(argv));
+  const run = async () => main(resolveSourceId(argv), {
+    ...resolveRegularization(argv),
+    mitigate: resolveMitigation(argv),
+  });
 
   run().catch((error) => {
     console.error(`\n${error.message}\n`);
@@ -1733,8 +2031,13 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `oneHotEncode`, `ordinalEncode` | funções | Índice de categoria → vetor de features |
 | `germanFeatureNames` | função | Nome de cada posição do vetor, por codificação |
 | `toGermanVector` | função | Cliente → numéricas escaladas + qualitativas codificadas |
-| `isFemale`, `summarizeGroup`, `approvalRatio`, `auditByGroup` | funções | Auditoria de disparidade por grupo |
+| `isFemale`, `toAuditRows`, `summarizeGroup`, `approvalRatio`, `auditByGroup` | funções | Auditoria de disparidade por grupo |
 | `formatAudit` | função | Auditoria → tabela para o terminal |
+| `thresholdFor` | função | Um número vale para os dois grupos; um par `{ women, men }` vale um para cada |
+| `rateThreshold` | função | Scores + fração → limiar que marca essa fração, no ponto médio da fronteira |
+| `fitGroupThresholds` | função | Calibra no **treino** um limiar por grupo que iguala as taxas de aprovação |
+| `summarizeDecisions` | função | Política de limiar → falsos positivos, falsos negativos, acurácia e custo |
+| `formatMitigation` | função | Políticas → tabela comparando razão de aprovação e preço |
 | `createGermanSource` | função | Fábrica das duas variantes do dataset real |
 | `parseDelimited` | função | Texto CSV → lista de objetos (parser mínimo) |
 | `toOrdinal` | função | Código `'A11'` → posição na lista documentada; lança se desconhecido |
@@ -1746,8 +2049,11 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `DEFAULT_SOURCE_ID`, `resolveSourceId` | constante / função | Fonte padrão e leitura de `--source=` |
 | `L2_LAMBDA`, `DROPOUT_RATE` | constantes | Intensidade padrão dos dois freios contra overfitting |
 | `parseNumericFlag`, `resolveRegularization` | funções | Leitura validada de `--l2=` e `--dropout=`; devolve só o que foi pedido, para a fonte manter o resto |
+| `resolveMitigation` | função | Leitura de `--mitigar`: interruptor sem valor, e recusa `--mitigar=false` em vez de adivinhar |
 | `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
-| `splitCustomers` | função | Divide clientes **brutos** em treino e teste |
+| `splitCustomers` | função | Divide clientes **brutos** em treino e teste, por fatiamento simples |
+| `stratifiedSplitCustomers` | função | O mesmo, preservando a proporção de classes — é o que `main` usa |
+| `stratifiedFolds` | função | Atribui uma dobra a cada cliente, mantendo a proporção de classes |
 | `majorityBaseline` | função | Piso da acurácia: sempre chutar a classe majoritária |
 | `compileModel` | função | Aplica optimizer, loss e métricas a um modelo |
 | `createRegularizer` | função | Devolve a penalidade L2 da camada, ou `null` quando `λ = 0` |
@@ -1759,6 +2065,7 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `formatConfusionMatrix` | função | Matriz → tabela alinhada para o terminal |
 | `computeMetrics` | função | Matriz → `{ precision, recall, f1Score }` |
 | `formatMetrics` | função | Métricas → três linhas comentadas para o terminal |
+| `rocFromScores` | função | Scores + rótulos → curva, sem precisar de modelo (é o que a validação cruzada usa) |
 | `computeRocCurve` | função | `{ points: [{ fpr, tpr, threshold }], auc }` varrendo todos os limiares |
 | `formatRocCurve` | função | Pontos → gráfico ASCII, com marcador opcional do limiar |
 | `FALSE_POSITIVE_COST`, `FALSE_NEGATIVE_COST` | constantes | Custos relativos dos dois erros (`1` e `5`) |
@@ -1768,6 +2075,12 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `formatTable` | função | Cabeçalho + linhas → tabela alinhada |
 | `formatThresholdComparison` | função | Candidatos → tabela comparativa de limiares |
 | `evaluateModel` | função | Roda `evaluate` e devolve `{ loss, accuracy }` |
+| `TRAINING`, `fitModel` | constante / função | A configuração de treino em um lugar só, usada pelos dois caminhos |
+| `CV_FOLDS`, `resolveFolds` | constante / função | Padrão de dobras e leitura de `--cv` / `--cv=k` |
+| `summarize` | função | Valores → `{ mean, standardError, lowest, highest }` |
+| `crossValidate` | função async | k dobras estratificadas → métricas por dobra, resumo, scores fora da amostra e auditoria dos 1.000 |
+| `formatCrossValidation` | função | Resultado → tabela com uma linha por dobra, média e erro padrão |
+| `reportCrossValidation` | função async | Caminho de execução de `--cv`: roda e imprime |
 | `main` | função async | Pipeline completo para uma fonte: treina, avalia, salva, recarrega e prevê |
 
 ---
@@ -1788,67 +2101,74 @@ dropout_Dropout2 (Dropout)  [[null,8]]                [null,8]                  
 dense_Dense3 (Dense)        [[null,8]]                [null,1]                  9
 Total params: 1073
 
-Test loss: 0.5255
-Train accuracy: 0.8050
+Test loss: 0.5306
+Train accuracy: 0.8112
 Test accuracy: 0.7150
 Baseline (classe majoritária): 0.7150
-Diferença treino − teste: 0.0900
+Diferença treino − teste: 0.0962
 
 Matriz de confusão (limiar 0.5):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |      121 (TN) |      22 (FP)
-Real ALTO  |       35 (FN) |      22 (TP)
+Real BAIXO |      117 (TN) |      26 (FP)
+Real ALTO  |       31 (FN) |      26 (TP)
 
 Precision: 0.5000 - dos marcados como ALTO RISCO, quantos eram
-Recall:    0.3860 - dos que eram ALTO RISCO, quantos foram pegos
-F1-score:  0.4356 - média harmônica entre precision e recall
+Recall:    0.4561 - dos que eram ALTO RISCO, quantos foram pegos
+F1-score:  0.4771 - média harmônica entre precision e recall
 
 Curva ROC (O = limiar 0.5, . = aleatório):
     TPR
-1.0 |                       *****************|
-    |                   ****          ...    |
+1.0 |                         ***************|
+    |                   ******        ...    |
     |                ***           ...       |
-    |             ***           ...          |
-    |           **          ....             |
-    |          *         ...                 |
-0.5 |        **       ...                    |
-    |    **O*      ...                       |
-    |  **      ....                          |
-    |       ...                              |
-    | *  ...                                 |
+    |               *           ...          |
+    |            ***        ....             |
+    |         ***        ...                 |
+0.5 |     **O*        ...                    |
+    |    *         ...                       |
+    |          ....                          |
+    | ***   ...                              |
+    |    ...                                 |
     |*...                                    |
 0.0 +----------------------------------------+
     0.0                               FPR 1.0
-AUC: 0.7404
+AUC: 0.7392
 
 Ajuste do limiar (FP custa 1, FN custa 5):
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
-Padrão (0.5)   | 0.5000 | 0.1538 | 0.3860 | 22 | 35 |   197
-Youden (max J) | 0.3138 | 0.3427 | 0.7368 | 49 | 15 |   124
-Menor custo    | 0.1421 | 0.5874 | 0.9298 | 84 |  4 |   104
+Padrão (0.5)   | 0.5000 | 0.1818 | 0.4561 | 26 | 31 |   181
+Youden (max J) | 0.2125 | 0.4755 | 0.8596 | 68 |  8 |   108
+Menor custo    | 0.1954 | 0.4965 | 0.8772 | 71 |  7 |   106
 
-Matriz no limiar escolhido (0.1421):
+Matriz no limiar escolhido (0.1954):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |       59 (TN) |      84 (FP)
-Real ALTO  |        4 (FN) |      53 (TP)
+Real BAIXO |       72 (TN) |      71 (FP)
+Real ALTO  |        7 (FN) |      50 (TP)
 
-Auditoria por sexo (o modelo nunca recebeu esta coluna):
+Auditoria por sexo — limiar único (o modelo nunca recebeu esta coluna):
 Grupo    |   N | Inadimp. real | Marcados ALTO | FN não pegos
 ---------+-----+---------------+---------------+-------------
-Mulheres |  64 |         28.1% |         75.0% |         0.0%
-Homens   | 136 |         28.7% |         65.4% |        10.3%
+Mulheres |  64 |         28.1% |         67.2% |         5.6%
+Homens   | 136 |         28.7% |         57.4% |        15.4%
 
-Razão de aprovação (regra dos 4/5): 0.723  <- abaixo de 0.80
+Razão de aprovação (regra dos 4/5): 0.769  <- abaixo de 0.80
 
-Probabilidade de alto risco: 0.7464
+Mitigação (limiares calibrados no TREINO, auditados no teste):
+Política         | Limiar M | Limiar H | Razão aprov. | Acurácia | Custo
+-----------------+----------+----------+--------------+----------+------
+Limiar único     |   0.1954 |   0.1954 |        0.769 |   0.6100 |   106
+Limiar por grupo |   0.2264 |   0.1794 |        0.932 |   0.6150 |   109
+Política ativa: limiar único. Use --mitigar para decidir por grupo.
+
+Probabilidade de alto risco: 0.7575
 Classificação: ALTO RISCO
 Modelo salvo em: /caminho/do/projeto/model
-Modelo recarregado — test loss: 0.5255
+Modelo recarregado — test loss: 0.5306
 Modelo recarregado — test accuracy: 0.7150
-Modelo recarregado — probabilidade: 0.7464
+Modelo recarregado — probabilidade: 0.7575
 Mesma predição do modelo original? sim
 ```
 
@@ -1863,11 +2183,11 @@ Os valores exatos não importam. O que se observa é o **comportamento**:
 - ✅ a curva ROC se descola da diagonal e a AUC fica bem acima de `0.5` → o score **ordena** os clientes;
 - ✅ o limiar sugerido custa menos que o `0.5` herdado → havia margem na régua, não no modelo.
 
-E duas coisas que **só aparecem no dataset real**, e que são o motivo de ele estar aqui:
+E três coisas que **só aparecem no dataset real**, e que são o motivo de ele estar aqui:
 
-- ⚠️ a acurácia (`0.7500`) mal supera o baseline da classe majoritária (`0.7150`) → **acurácia sozinha não diz se o modelo presta**;
-- ⚠️ precision (`0.5510`) e recall (`0.4737`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade;
-- ⚠️ a razão de aprovação entre os grupos fica perto de `0.80` → o modelo trata mulheres e homens de forma diferente [sem nunca ter recebido a coluna de sexo](#a-coluna-que-o-modelo-não-recebeu).
+- ⚠️ a acurácia (`0.7150`) **empata** com o baseline da classe majoritária (`0.7150`) → acurácia sozinha não diz se o modelo presta, e a AUC de `0.7392` ao lado prova que o problema é o corte, não o modelo;
+- ⚠️ precision (`0.5000`) e recall (`0.4561`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade;
+- ⚠️ a razão de aprovação entre os grupos cai a `0.769`, abaixo da regra dos quatro quintos → o modelo trata mulheres e homens de forma diferente [sem nunca ter recebido a coluna de sexo](#a-coluna-que-o-modelo-não-recebeu). A linha seguinte mostra o que um [limiar por grupo](#-mitigação-da-disparidade) faria com esse número — `0.932` — e o que ele cobraria: três pontos de custo.
 
 No dataset sintético, os mesmos números ficam em `0.9508` de acurácia contra `0.8250` de baseline, com AUC `0.9771` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real. Note que **o alerta da acurácia vale para os dois**: com 15,8% de inadimplentes, `0.95` também são só 13 pontos acima de chutar sempre "bom pagador".
 
@@ -1915,13 +2235,14 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 | Dataset real com apenas **1.000 linhas**                         | Pouco dado para uma rede neural — boa parte da variação entre execuções vem daí |
 | Todos os níveis one-hot mantidos (*dummy variable trap*)         | Inofensivo em rede neural, quebraria uma regressão linear |
 | `savingsStatus` trata "desconhecido" como mais um nível          | Ausência de dado não é uma categoria como as outras; o certo seria um indicador de faltante separado |
-| Disparidade **medida**, não corrigida                            | O projeto audita e reporta; mitigar (reponderação, restrição de paridade, limiar por grupo) é outro problema, com trade-offs próprios |
+| Mitigação da disparidade **desligada por padrão**                | O limiar por grupo existe e funciona ([medido](#-mitigação-da-disparidade)), mas exige ler o atributo protegido na decisão e, no *hold-out* de 200 linhas, corrige com a dose errada. Ligá-la é decisão de política |
+| Mitigação limitada à **paridade demográfica**                    | Igualar aprovação é um critério entre vários; igualar FNR ou odds daria outra política, e as duas não podem valer juntas com taxas-base diferentes |
+| Nada é feito contra o **vazamento do atributo protegido**         | O sexo é previsível a partir das features do modelo com AUC `0.699`; a mitigação compensa o efeito no fim da linha, sem remover a causa |
 | CSV sem validação de esquema, faixas ou valores ausentes        | Dado real vem com coluna faltando, texto onde deveria haver número e `NaN` |
-| Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado |
+| Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado. A [mitigação](#-mitigação-da-disparidade) já faz certo — calibra no treino, audita no teste —, o ajuste do limiar ainda não |
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
 | Modelo salvo sem versionar o **scaler** junto                    | Pesos novos com pré-processamento antigo → training-serving skew |
-| Split simples em vez de **estratificado**                        | Com 30% de positivos no real e 15,8% no sintético, um sorteio ruim desequilibra o hold-out |
-| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande — [medida aqui](#uma-divisão-não-é-o-dataset): a AUC do dataset real varia `0.72`–`0.81` conforme o sorteio |
+| `npm start` continua reportando **uma** divisão                  | O relatório completo — matriz, curva, limiar, auditoria — roda sobre um hold-out só, e a divisão fixa é reconhecidamente ruim. A estimativa honesta está a um comando de distância ([`npm run cv`](#-validação-cruzada-e-split-estratificado)), mas não é o padrão |
 | Regularização escolhida em uma grade medida no **mesmo** protocolo de avaliação | Trinta configurações comparadas sem conjunto de validação separado; o certo seria escolher em um conjunto e reportar em outro — o mesmo problema do [limiar](#-ajuste-do-limiar-de-decisão), duas linhas acima |
 | Nenhum tratamento para o **desbalanceamento** durante o treino   | O dataset agora tem 15,8% de positivos, mas o treino não usa `classWeight`, reamostragem nem *focal loss*; a única correção aplicada é [no limiar](#-ajuste-do-limiar-de-decisão), depois do fato |
 | Ruído sintético **normal e independente** por coluna             | Erro real é enviesado (renda é subdeclarada, não sorteada em torno da verdade) e correlacionado entre colunas |
@@ -1938,6 +2259,8 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~Dataset sintético limpo e quase equilibrado~~ | [Ruído e desbalanceamento](#-geração-dos-dados-sintéticos) injetados, com o efeito de cada um medido |
 | ~~Nenhuma defesa contra overfitting além do early stopping~~ | [L2 e dropout](#-regularização-l2-e-dropout), com a dose declarada por fonte e medida em grade |
 | ~~CSV sintético gerado com `Math.random()`, irreprodutível~~ | Gerador com semente: `npm run seed` reconstrói o arquivo versionado byte a byte |
+| ~~Split simples em vez de estratificado~~ | [`stratifiedSplitCustomers`](#-validação-cruzada-e-split-estratificado): o baseline do teste passou a sair `0.7000` em **todas** as divisões |
+| ~~Sem validação cruzada~~ | `npm run cv`: k dobras estratificadas, média com erro padrão, e a auditoria de disparidade rodando sobre os 1.000 clientes |
 
 ---
 
@@ -1955,8 +2278,8 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as colunas restantes~~ — feito, veja [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal);
 - [x] ~~adicionar ruído e desbalanceamento aos dados sintéticos~~ — feito, veja [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos);
 - [x] ~~regularização L2 e dropout~~ — feito, veja [Regularização: L2 e dropout](#-regularização-l2-e-dropout);
-- [ ] mitigar a disparidade medida, não só reportá-la;
-- [ ] validação cruzada e split estratificado;
+- [x] ~~mitigar a disparidade medida, não só reportá-la~~ — feito, veja [Mitigação da disparidade](#-mitigação-da-disparidade);
+- [x] ~~validação cruzada e split estratificado~~ — feito, veja [Validação cruzada e split estratificado](#-validação-cruzada-e-split-estratificado);
 - [ ] comparar arquiteturas diferentes.
 
 **Produto**

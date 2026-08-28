@@ -619,17 +619,47 @@ const approvalRatio = (women, men) => {
   return approvedMen === 0 ? Infinity : approvedWomen / approvedMen;
 };
 
+// Uma linha por cliente com as três coisas que a auditoria precisa: o que
+// aconteceu de verdade, o que o modelo achou e a qual grupo a pessoa
+// pertence. A mitigação usa exatamente as mesmas linhas.
+const toAuditRows = (customers, scores) => customers.map((customer, index) => ({
+  risk: customer[CSV_LABEL_COLUMN],
+  score: scores[index],
+  female: isFemale(customer),
+}));
+
+// O limiar pode chegar de duas formas: um número, que vale para todo
+// mundo, ou um par `{ women, men }`, que vale um para cada grupo. A
+// segunda forma é a mitigação da seção 7.1 — e é justamente por isso que
+// a auditoria aceita as duas: para medir a decisão mitigada com a mesma
+// régua que mediu a original.
+const thresholdFor = (threshold, female) => (
+  typeof threshold === 'number'
+    ? threshold
+    : threshold[female ? 'women' : 'men']
+);
+
 const auditByGroup = (customers, scores, threshold = DECISION_THRESHOLD) => {
-  const rows = customers.map((customer, index) => ({
-    risk: customer[CSV_LABEL_COLUMN],
-    score: scores[index],
-    female: isFemale(customer),
-  }));
+  const rows = toAuditRows(customers, scores);
 
-  const women = summarizeGroup(rows.filter(({ female }) => female), threshold);
-  const men = summarizeGroup(rows.filter(({ female }) => !female), threshold);
+  const women = summarizeGroup(
+    rows.filter(({ female }) => female),
+    thresholdFor(threshold, true),
+  );
+  const men = summarizeGroup(
+    rows.filter(({ female }) => !female),
+    thresholdFor(threshold, false),
+  );
 
-  return { women, men, approvalRatio: approvalRatio(women, men) };
+  return {
+    women,
+    men,
+    approvalRatio: approvalRatio(women, men),
+    thresholds: {
+      women: thresholdFor(threshold, true),
+      men: thresholdFor(threshold, false),
+    },
+  };
 };
 
 const formatAudit = ({ women, men, approvalRatio }) => [
@@ -647,6 +677,122 @@ const formatAudit = ({ women, men, approvalRatio }) => [
     + `${Number.isFinite(approvalRatio) ? approvalRatio.toFixed(3) : 'infinita'}`
     + `${approvalRatio < 0.8 ? '  <- abaixo de 0.80' : ''}`,
 ].join('\n');
+
+// --------------------------------------------------
+// 7.1 Mitigação: mexer na decisão, não só no relatório
+// --------------------------------------------------
+// Medir a disparidade e parar aí deixa o problema documentado e intacto.
+// O passo seguinte é agir sobre ele, e o lugar mais barato de agir é
+// DEPOIS do modelo: no limiar. Nenhum peso muda, nenhum treino é
+// refeito — os scores continuam exatamente os mesmos, e o que se move é
+// onde cada grupo é cortado.
+//
+// O preço é explícito e desconfortável: para igualar as taxas de
+// aprovação é preciso LER o atributo protegido na hora de decidir — a
+// mesma coluna que o modelo foi proibido de ver. Não há como fugir
+// disso: corrigir uma diferença entre grupos exige saber o grupo. Por
+// isso a mitigação aqui é uma opção de linha de comando e não o padrão.
+// Ligá-la é uma decisão de política, não um detalhe de engenharia: em
+// vários países usar sexo na decisão é ilegal mesmo quando a intenção
+// declarada é reduzir a diferença.
+
+// Limiar que marca a fração `rate` dos scores recebidos.
+//
+// Ordena do maior para o menor e corta no ponto médio entre a última
+// linha marcada e a primeira que fica de fora. O meio do intervalo é
+// preferível a qualquer uma das pontas: um score novo que caia
+// exatamente sobre a fronteira não decide a própria sorte por um empate.
+//
+// Empate de verdade não tem saída: se os dois vizinhos têm o mesmo
+// score, o ponto médio é esse score, e o `>=` marca os dois. A fração
+// pedida passa a ser um piso, não uma promessa.
+const rateThreshold = (scores, rate) => {
+  const sorted = [...scores].sort((first, second) => second - first);
+  const marked = Math.round(rate * sorted.length);
+
+  // Marcar ninguém e marcar todo mundo são respostas legítimas, e as
+  // duas precisam de um limiar que exista de fato. `Infinity` não é
+  // alcançado por nenhuma probabilidade; `0` é alcançado por todas.
+  if (marked <= 0) {
+    return Infinity;
+  }
+
+  if (marked >= sorted.length) {
+    return 0;
+  }
+
+  return (sorted[marked - 1] + sorted[marked]) / 2;
+};
+
+// Calibra um limiar por grupo de forma que os dois marquem a MESMA
+// fração — a taxa que o limiar único produz no conjunto inteiro.
+//
+// Os clientes passados aqui precisam ser os de TREINO. Calibrar no mesmo
+// conjunto que será auditado devolve paridade por construção: a razão
+// sai exatamente 1 — há um teste que fixa isso — e não significa nada,
+// porque a régua foi ajustada às respostas da prova. Calibrando fora, e
+// medindo em 1000 clientes por validação cruzada, o número honesto é
+// 1.0140 ± 0.0129 contra 0.8258 ± 0.0172 sem mitigação nenhuma.
+const fitGroupThresholds = (customers, scores, threshold = DECISION_THRESHOLD) => {
+  const rows = toAuditRows(customers, scores);
+  const rate = safeDivide(
+    rows.filter(({ score }) => score >= threshold).length,
+    rows.length,
+  );
+
+  const thresholdOf = (female) => rateThreshold(
+    rows.filter((row) => row.female === female).map(({ score }) => score),
+    rate,
+  );
+
+  return { women: thresholdOf(true), men: thresholdOf(false) };
+};
+
+// O que uma política de limiares custa em decisão. A auditoria diz se a
+// diferença encolheu; isto diz quanto se pagou por isso — e as duas
+// respostas precisam aparecer juntas, senão a mitigação parece de graça.
+const summarizeDecisions = (customers, scores, threshold, costs = {
+  falsePositive: FALSE_POSITIVE_COST,
+  falseNegative: FALSE_NEGATIVE_COST,
+}) => {
+  const decided = toAuditRows(customers, scores).map((row) => ({
+    ...row,
+    flagged: row.score >= thresholdFor(threshold, row.female),
+  }));
+
+  const falsePositives = decided
+    .filter(({ risk, flagged }) => flagged && risk === 0).length;
+  const falseNegatives = decided
+    .filter(({ risk, flagged }) => !flagged && risk === 1).length;
+
+  return {
+    falsePositives,
+    falseNegatives,
+    accuracy: safeDivide(
+      decided.length - falsePositives - falseNegatives,
+      decided.length,
+    ),
+    cost: falsePositives * costs.falsePositive
+      + falseNegatives * costs.falseNegative,
+  };
+};
+
+// As duas políticas lado a lado. Sem a coluna de custo a tabela contaria
+// meia história: a razão de aprovação sempre melhora quando se ajusta o
+// limiar para ela — a pergunta é o que se perdeu no caminho.
+const formatMitigation = (policies) => formatTable(
+  ['Política', 'Limiar M', 'Limiar H', 'Razão aprov.', 'Acurácia', 'Custo'],
+  policies.map(({ label, audit, decisions }) => [
+    label,
+    formatThreshold(audit.thresholds.women),
+    formatThreshold(audit.thresholds.men),
+    Number.isFinite(audit.approvalRatio)
+      ? audit.approvalRatio.toFixed(3)
+      : 'infinita',
+    decisions.accuracy.toFixed(4),
+    String(decisions.cost),
+  ]),
+);
 
 // --------------------------------------------------
 // 8. Fontes de dados
@@ -851,6 +997,52 @@ const resolveRegularization = (argv = []) => {
   );
 };
 
+// `--cv` sozinho usa o padrão de dobras; `--cv=10` escolhe. Duas dobras
+// é o mínimo que ainda é validação cruzada, e um k não inteiro não
+// significa nada — os dois casos param aqui em vez de virar um resultado
+// estranho lá adiante.
+const resolveFolds = (argv = []) => {
+  const flag = argv.find((argument) => argument.startsWith('--cv'));
+
+  if (!flag) {
+    return null;
+  }
+
+  if (flag === '--cv') {
+    return CV_FOLDS;
+  }
+
+  const folds = parseNumericFlag(argv, 'cv', CV_FOLDS, 20);
+
+  if (!Number.isInteger(folds) || folds < 2) {
+    throw new Error(
+      `Valor inválido para --cv: ${folds}. Use um inteiro entre 2 e 20.`,
+    );
+  }
+
+  return folds;
+};
+
+// A mitigação é um interruptor, não um número: ou a decisão olha o grupo
+// ou não olha. Um valor depois do sinal de igual é recusado de propósito
+// — aceitar `--mitigar=false` daria a impressão de que existe um terceiro
+// estado, e `--mitigar=0` ligaria a política que o usuário quis desligar.
+const resolveMitigation = (argv = []) => {
+  const flag = argv.find((argument) => argument.startsWith('--mitigar'));
+
+  if (!flag) {
+    return false;
+  }
+
+  if (flag !== '--mitigar') {
+    throw new Error(
+      `Use --mitigar sem valor. Recebido: ${flag}.`,
+    );
+  }
+
+  return true;
+};
+
 // --------------------------------------------------
 // 9. Separar treino e teste
 // --------------------------------------------------
@@ -883,8 +1075,58 @@ const splitCustomers = (customers, trainRatio = 0.8) => {
   };
 };
 
+// Estratificar é preservar a proporção de classes nos dois lados.
+//
+// O corte cru já embaralhado acerta a proporção EM MÉDIA, e erra em
+// qualquer execução específica: com 30% de inadimplentes e 200 linhas de
+// teste, o sorteio entrega entre 24% e 36% conforme a semente. Isso move
+// o piso da classe majoritária, e o piso é a régua contra a qual toda a
+// acurácia deste projeto é lida — ou seja, o ruído do sorteio entra
+// direto na conclusão.
+//
+// A implementação separa os índices por classe, corta cada classe na
+// mesma proporção e devolve os clientes na ORDEM original. A ordem
+// importa: `fit` reserva os últimos 20% do treino para validação antes
+// de embaralhar, então um conjunto agrupado por rótulo daria uma fatia
+// de validação quase toda de uma classe só.
+const stratifiedSplitCustomers = (customers, trainRatio = 0.8) => {
+  const training = new Set();
+
+  [...new Set(customers.map(({ risk }) => risk))].forEach((label) => {
+    const indexes = customers
+      .map((customer, index) => ({ risk: customer.risk, index }))
+      .filter((row) => row.risk === label);
+
+    indexes
+      .slice(0, Math.floor(indexes.length * trainRatio))
+      .forEach(({ index }) => training.add(index));
+  });
+
+  return {
+    trainCustomers: customers.filter((ignored, index) => training.has(index)),
+    testCustomers: customers.filter((ignored, index) => !training.has(index)),
+  };
+};
+
+// Atribui uma dobra a cada cliente, também mantendo a proporção de
+// classes. Distribuir em rodízio DENTRO de cada classe é o que garante
+// que nenhuma dobra fique com inadimplentes de menos — com 5 dobras e
+// 300 positivos, cada uma recebe 60.
+const stratifiedFolds = (customers, folds) => {
+  const seen = new Map();
+
+  return customers.map(({ risk }) => {
+    const position = seen.get(risk) ?? 0;
+
+    seen.set(risk, position + 1);
+
+    return position % folds;
+  });
+};
+
 // Variante que opera sobre features JÁ normalizadas. Continua servindo o
-// caminho sintético e os testes; o fluxo principal usa `splitCustomers`.
+// caminho sintético e os testes; o fluxo principal usa o split
+// estratificado.
 const splitDataset = ({ features, labels }, trainRatio = 0.8) => {
   const trainSize = Math.floor(features.length * trainRatio);
 
@@ -957,6 +1199,30 @@ const buildModel = (inputSize = 4, options = {}) => {
 
   return compileModel(model);
 };
+
+// A configuração de treino fica em um lugar só porque DOIS caminhos a
+// usam: o fluxo principal e a validação cruzada. Se elas divergissem, a
+// estimativa cruzada estaria medindo um modelo que o projeto não entrega.
+const TRAINING = {
+  epochs: 40,
+  batchSize: 32,
+  validationSplit: 0.2,
+  patience: 5,
+};
+
+const fitModel = (model, xTrain, yTrain, options = {}) => model.fit(xTrain, yTrain, {
+  epochs: TRAINING.epochs,
+  batchSize: TRAINING.batchSize,
+  validationSplit: TRAINING.validationSplit,
+  shuffle: true,
+  callbacks: [
+    tf.callbacks.earlyStopping({
+      monitor: 'val_loss',
+      patience: TRAINING.patience,
+    }),
+  ],
+  ...options,
+});
 
 // --------------------------------------------------
 // 11. Persistência
@@ -1142,12 +1408,11 @@ const formatMetrics = (metrics) => {
 // por isso, NÃO depende do limiar. Ela mede a capacidade de ORDENAR:
 // é a probabilidade de um cliente de alto risco receber score maior que
 // um de baixo risco. 0.5 = moeda; 1.0 = separação perfeita.
-const computeRocCurve = (model, xTest, yTest) => {
-  const { scores, actuals } = tf.tidy(() => ({
-    scores: Array.from(model.predict(xTest).reshape([-1]).dataSync()),
-    actuals: Array.from(yTest.reshape([-1]).dataSync()),
-  }));
-
+// A curva não precisa de um modelo: precisa de scores e rótulos. Separar
+// as duas coisas é o que permite traçar a ROC sobre predições que vieram
+// de VÁRIOS modelos — é exatamente o caso da validação cruzada, em que
+// cada cliente foi pontuado pela dobra que não o viu treinar.
+const rocFromScores = (scores, actuals) => {
   // Do score mais alto para o mais baixo: descer nessa lista é ir
   // afrouxando o limiar, aprovando cada vez mais casos como positivos.
   const ranked = scores
@@ -1198,6 +1463,15 @@ const computeRocCurve = (model, xTest, yTest) => {
   // positives e negatives saem junto porque converter as taxas de volta
   // em contagens absolutas é o que permite pôr preço nos erros.
   return { points, auc, positives, negatives };
+};
+
+const computeRocCurve = (model, xTest, yTest) => {
+  const { scores, actuals } = tf.tidy(() => ({
+    scores: Array.from(model.predict(xTest).reshape([-1]).dataSync()),
+    actuals: Array.from(yTest.reshape([-1]).dataSync()),
+  }));
+
+  return rocFromScores(scores, actuals);
 };
 
 // TPR da curva em um FPR qualquer, interpolando entre os pontos vizinhos.
@@ -1349,13 +1623,265 @@ const evaluateModel = (model, xTest, yTest) => {
 };
 
 // --------------------------------------------------
-// 17. Treinar, avaliar, salvar, recarregar e prever
+// 17. Validação cruzada
+// --------------------------------------------------
+// Um hold-out de 200 linhas responde "quanto o modelo acerta?" com uma
+// incerteza que ninguém vê. A validação cruzada troca essa resposta por
+// outra, honesta: k estimativas independentes, cada cliente pontuado
+// exatamente uma vez por um modelo que NÃO o viu treinar.
+//
+// Custa k treinos em vez de um. Em troca, a barra de erro deixa de ser
+// suposição — e a auditoria de disparidade passa a ter os 1.000 clientes
+// para medir em vez de 64 mulheres.
+const CV_FOLDS = 5;
+
+// Média com erro padrão. Com uma amostra só, a variância é indefinida e
+// o erro padrão sai 0 — não porque a medida seja perfeita, e sim porque
+// uma medição não tem do que discordar.
+const summarize = (values) => {
+  const mean = values.reduce((total, value) => total + value, 0) / values.length;
+  const variance = values.length < 2
+    ? 0
+    : values.reduce((total, value) => total + (value - mean) ** 2, 0)
+      / (values.length - 1);
+
+  return {
+    mean,
+    standardError: Math.sqrt(variance / values.length),
+    lowest: Math.min(...values),
+    highest: Math.max(...values),
+  };
+};
+
+const crossValidate = async (source, options = {}) => {
+  const {
+    folds = CV_FOLDS,
+    seed = SHUFFLE_SEED,
+    l2 = source.regularization.l2,
+    dropout = source.regularization.dropout,
+    verbose = 0,
+    costs = {
+      falsePositive: FALSE_POSITIVE_COST,
+      falseNegative: FALSE_NEGATIVE_COST,
+    },
+  } = options;
+
+  source.ensure();
+
+  const customers = shuffle(await source.read(), createRandom(seed));
+  const assignment = stratifiedFolds(customers, folds);
+
+  // O score de cada cliente vem da dobra que o deixou de fora. Ao final,
+  // este vetor tem uma predição fora da amostra para o dataset INTEIRO —
+  // é ele que permite auditar 1.000 pessoas de uma vez.
+  const scores = new Array(customers.length);
+  const groupThresholds = new Array(customers.length);
+  const calibration = [];
+  const results = [];
+
+  for (let fold = 0; fold < folds; fold += 1) {
+    const inFold = (ignored, index) => assignment[index] === fold;
+    const trainCustomers = customers.filter((...args) => !inFold(...args));
+    const testCustomers = customers.filter(inFold);
+
+    // O scaler é remedido em CADA dobra. Reaproveitar um scaler ajustado
+    // no dataset inteiro vazaria o teste da dobra para dentro do treino,
+    // e o erro seria invisível: o número sairia bom.
+    const scaler = source.fitScaler(trainCustomers);
+    const toVector = (customer) => source.toVector(customer, scaler);
+
+    const xTrain = tf.tensor2d(trainCustomers.map(toVector));
+    const yTrain = tf.tensor2d(trainCustomers.map(({ risk }) => [risk]));
+    const xTest = tf.tensor2d(testCustomers.map(toVector));
+    const yTest = tf.tensor2d(testCustomers.map(({ risk }) => [risk]));
+
+    const model = buildModel(source.featureNames.length, { l2, dropout });
+
+    // eslint-disable-next-line no-await-in-loop
+    await fitModel(model, xTrain, yTrain, { verbose });
+
+    const { loss, accuracy } = evaluateModel(model, xTest, yTest);
+    const roc = computeRocCurve(model, xTest, yTest);
+    const chosen = chooseThresholdByCost(roc, costs);
+
+    const foldScores = tf.tidy(() =>
+      Array.from(model.predict(xTest).reshape([-1]).dataSync()));
+    const trainScores = tf.tidy(() =>
+      Array.from(model.predict(xTrain).reshape([-1]).dataSync()));
+
+    let position = 0;
+
+    customers.forEach((ignored, index) => {
+      if (assignment[index] === fold) {
+        scores[index] = foldScores[position];
+        position += 1;
+      }
+    });
+
+    calibration.push({ fold, trainCustomers, trainScores });
+
+    results.push({
+      fold,
+      trainSize: trainCustomers.length,
+      testSize: testCustomers.length,
+      baseline: majorityBaseline(testCustomers.map(({ risk }) => [risk])),
+      loss,
+      accuracy,
+      auc: roc.auc,
+      threshold: chosen.threshold,
+      cost: chosen.cost,
+    });
+
+    tf.dispose([xTrain, yTrain, xTest, yTest]);
+    model.dispose();
+  }
+
+  // O limiar da auditoria sai da curva FORA DA AMOSTRA, montada com as k
+  // dobras juntas — a mesma regra de menor custo do fluxo principal.
+  const labels = customers.map(({ risk }) => risk);
+  const roc = rocFromScores(scores, labels);
+  const threshold = chooseThresholdByCost(roc, costs).threshold;
+
+  const audit = source.audit
+    ? source.audit(customers, scores, threshold)
+    : null;
+
+  // A mitigação da validação cruzada precisa de um limiar POR CLIENTE:
+  // cada um é cortado pelos limiares que suas quatro dobras de treino
+  // calibraram. Como `auditByGroup` recebe um número ou um par, e não uma
+  // lista, a auditoria roda sobre a DECISÃO já tomada — 1 para marcado,
+  // 0 para não — com o corte trivial em 0.5. É a mesma contagem.
+  calibration.forEach(({ fold, trainCustomers, trainScores }) => {
+    const pair = fitGroupThresholds(trainCustomers, trainScores, threshold);
+
+    customers.forEach((customer, index) => {
+      if (assignment[index] === fold) {
+        groupThresholds[index] = pair[isFemale(customer) ? 'women' : 'men'];
+      }
+    });
+  });
+
+  const decided = scores.map((score, index) => (score >= groupThresholds[index] ? 1 : 0));
+
+  const mitigated = source.audit
+    ? source.audit(customers, decided, 0.5)
+    : null;
+
+  // O que cada política cobra sobre o dataset inteiro. Sem esta linha a
+  // mitigação pareceria de graça: a razão de aprovação melhora sempre,
+  // porque é para ela que o limiar foi ajustado.
+  const decisions = {
+    pooled: summarizeDecisions(customers, scores, threshold, costs),
+    mitigated: summarizeDecisions(customers, decided, 0.5, costs),
+  };
+
+  return {
+    folds: results,
+    summary: {
+      baseline: summarize(results.map((result) => result.baseline)),
+      accuracy: summarize(results.map((result) => result.accuracy)),
+      auc: summarize(results.map((result) => result.auc)),
+      cost: summarize(results.map((result) => result.cost)),
+    },
+    outOfSample: { scores, threshold, auc: roc.auc },
+    audit,
+    mitigated,
+    decisions,
+  };
+};
+
+const formatCrossValidation = ({ folds, summary, outOfSample }) => [
+  formatTable(
+    ['Dobra', 'Treino', 'Teste', 'Baseline', 'Acurácia', 'AUC', 'Limiar', 'Custo'],
+    [
+      ...folds.map((result) => [
+        String(result.fold + 1),
+        String(result.trainSize),
+        String(result.testSize),
+        result.baseline.toFixed(4),
+        result.accuracy.toFixed(4),
+        result.auc.toFixed(4),
+        formatThreshold(result.threshold),
+        String(result.cost),
+      ]),
+      [
+        'Média',
+        '',
+        '',
+        summary.baseline.mean.toFixed(4),
+        summary.accuracy.mean.toFixed(4),
+        summary.auc.mean.toFixed(4),
+        '',
+        summary.cost.mean.toFixed(1),
+      ],
+      [
+        'Erro',
+        '',
+        '',
+        `± ${summary.baseline.standardError.toFixed(4)}`,
+        `± ${summary.accuracy.standardError.toFixed(4)}`,
+        `± ${summary.auc.standardError.toFixed(4)}`,
+        '',
+        `± ${summary.cost.standardError.toFixed(1)}`,
+      ],
+    ],
+  ),
+  '',
+  // A AUC fora da amostra NÃO é a média das AUCs por dobra: ela vem de
+  // uma curva só, montada com todos os clientes juntos. As duas
+  // respondem perguntas diferentes e não têm por que coincidir.
+  `AUC sobre o dataset inteiro (curva única, score fora da amostra): ${outOfSample.auc.toFixed(4)}`,
+].join('\n');
+
+// Caminho de execução alternativo: em vez de UM hold-out com relatório
+// completo, k treinos com a estimativa e sua incerteza.
+const reportCrossValidation = async (sourceId = DEFAULT_SOURCE_ID, options = {}) => {
+  const source = SOURCES[sourceId];
+  const { folds = CV_FOLDS } = options;
+
+  console.log('Fonte:', source.label);
+  console.log('Arquivo:', source.csvPath);
+  console.log(`Validação cruzada estratificada: ${folds} dobras\n`);
+
+  const result = await crossValidate(source, options);
+
+  console.log(formatCrossValidation(result));
+
+  if (result.audit) {
+    const total = result.folds.reduce((sum, { testSize }) => sum + testSize, 0);
+
+    console.log('');
+    console.log(`Auditoria sobre os ${total} clientes, cada um pontuado pela dobra que não o viu:`);
+    console.log(formatAudit(result.audit));
+    console.log('');
+    console.log('A mesma auditoria com limiar por grupo, calibrado nas dobras de treino:');
+    console.log(formatAudit(result.mitigated));
+    console.log('');
+    console.log(formatTable(
+      ['Política', 'Razão aprov.', 'Acurácia', 'Custo'],
+      [
+        ['Limiar único', result.audit.approvalRatio.toFixed(3),
+          result.decisions.pooled.accuracy.toFixed(4),
+          String(result.decisions.pooled.cost)],
+        ['Limiar por grupo', result.mitigated.approvalRatio.toFixed(3),
+          result.decisions.mitigated.accuracy.toFixed(4),
+          String(result.decisions.mitigated.cost)],
+      ],
+    ));
+  }
+
+  return result;
+};
+
+// --------------------------------------------------
+// 18. Treinar, avaliar, salvar, recarregar e prever
 // --------------------------------------------------
 const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const source = SOURCES[sourceId];
+  const { mitigate = false, ...regularization } = overrides;
 
   // A fonte decide; a linha de comando tem a última palavra.
-  const { l2, dropout } = { ...source.regularization, ...overrides };
+  const { l2, dropout } = { ...source.regularization, ...regularization };
 
   // O sintético se gera se faltar; o real só confere que está em disco.
   source.ensure();
@@ -1371,7 +1897,11 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   console.log('Clientes lidos:', customers.length);
   console.log('Features:', source.featureNames.join(', '));
 
-  const { trainCustomers, testCustomers } = splitCustomers(customers);
+  // Estratificado: o teste recebe a MESMA proporção de inadimplentes do
+  // arquivo, então o piso da classe majoritária deixa de depender do
+  // sorteio. Sem isso, o número contra o qual toda a acurácia é lida
+  // muda de execução para execução por motivo nenhum.
+  const { trainCustomers, testCustomers } = stratifiedSplitCustomers(customers);
 
   // A escala é medida SÓ no treino e aplicada aos dois conjuntos.
   // O teste é tratado como dado que ainda não existia quando o
@@ -1392,18 +1922,7 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   console.log(`Regularização: L2 = ${l2}, dropout = ${dropout}`);
   model.summary();
 
-  await model.fit(xTrain, yTrain, {
-    epochs: 40,
-    batchSize: 32,
-    validationSplit: 0.2,
-    shuffle: true,
-    callbacks: [
-      tf.callbacks.earlyStopping({
-        monitor: 'val_loss',
-        patience: 5,
-      }),
-    ],
-  });
+  await fitModel(model, xTrain, yTrain);
 
   // O mesmo modelo avaliado nos dois conjuntos. `evaluate` roda em modo de
   // inferência, então o dropout está DESLIGADO nas duas medidas — é a
@@ -1502,8 +2021,38 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
     const scores = tf.tidy(() =>
       Array.from(model.predict(xTest).reshape([-1]).dataSync()));
 
-    console.log('Auditoria por sexo (o modelo nunca recebeu esta coluna):');
-    console.log(formatAudit(source.audit(testCustomers, scores, chosen.threshold)));
+    // Os scores do treino existem aqui por um motivo só: calibrar os
+    // limiares por grupo. Eles não entram em nenhuma métrica publicada —
+    // quem é auditado continua sendo o conjunto de teste.
+    const trainScores = tf.tidy(() =>
+      Array.from(model.predict(xTrain).reshape([-1]).dataSync()));
+
+    const policies = [
+      { label: 'Limiar único', threshold: chosen.threshold },
+      {
+        label: 'Limiar por grupo',
+        threshold: fitGroupThresholds(trainCustomers, trainScores, chosen.threshold),
+      },
+    ].map(({ label, threshold }) => ({
+      label,
+      audit: source.audit(testCustomers, scores, threshold),
+      decisions: summarizeDecisions(testCustomers, scores, threshold, costs),
+    }));
+
+    const active = policies[mitigate ? 1 : 0];
+
+    console.log(
+      `Auditoria por sexo — ${active.label.toLowerCase()}`,
+      '(o modelo nunca recebeu esta coluna):',
+    );
+    console.log(formatAudit(active.audit));
+    console.log('');
+
+    console.log('Mitigação (limiares calibrados no TREINO, auditados no teste):');
+    console.log(formatMitigation(policies));
+    console.log(mitigate
+      ? 'Política ativa: limiar por grupo — a decisão lê o sexo do cliente.'
+      : 'Política ativa: limiar único. Use --mitigar para decidir por grupo.');
     console.log('');
   }
 
@@ -1560,8 +2109,17 @@ if (require.main === module) {
   // isso, um argumento inválido imprimiria stack trace no lugar da
   // mensagem que diz quais fontes existem.
   const argv = process.argv.slice(2);
-  const run = async () =>
-    main(resolveSourceId(argv), resolveRegularization(argv));
+  const run = async () => {
+    // Tudo que pode lançar fica DENTRO da função async, para que um
+    // argumento inválido vire rejeição e caia no mesmo `.catch`.
+    const folds = resolveFolds(argv);
+    const sourceId = resolveSourceId(argv);
+    const regularization = resolveRegularization(argv);
+
+    return folds === null
+      ? main(sourceId, { ...regularization, mitigate: resolveMitigation(argv) })
+      : reportCrossValidation(sourceId, { ...regularization, folds });
+  };
 
   run().catch((error) => {
     console.error(`\n${error.message}\n`);
@@ -1625,10 +2183,16 @@ module.exports = {
   germanFeatureNames,
   toGermanVector,
   isFemale,
+  toAuditRows,
   summarizeGroup,
   approvalRatio,
+  thresholdFor,
   auditByGroup,
   formatAudit,
+  rateThreshold,
+  fitGroupThresholds,
+  summarizeDecisions,
+  formatMitigation,
   createGermanSource,
   SYNTHETIC_SOURCE,
   GERMAN_SOURCE,
@@ -1638,9 +2202,13 @@ module.exports = {
   resolveSourceId,
   parseNumericFlag,
   resolveRegularization,
+  resolveMitigation,
+  resolveFolds,
   createRandom,
   shuffle,
   splitCustomers,
+  stratifiedSplitCustomers,
+  stratifiedFolds,
   majorityBaseline,
   readCustomersCsv,
   loadDatasetCsv,
@@ -1655,6 +2223,7 @@ module.exports = {
   formatConfusionMatrix,
   computeMetrics,
   formatMetrics,
+  rocFromScores,
   computeRocCurve,
   formatRocCurve,
   FALSE_POSITIVE_COST,
@@ -1665,5 +2234,12 @@ module.exports = {
   formatTable,
   formatThresholdComparison,
   evaluateModel,
+  TRAINING,
+  fitModel,
+  CV_FOLDS,
+  summarize,
+  crossValidate,
+  formatCrossValidation,
+  reportCrossValidation,
   main,
 };
