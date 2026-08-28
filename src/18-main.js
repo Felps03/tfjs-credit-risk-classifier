@@ -17,7 +17,8 @@ const { evaluateModel, majorityBaseline } = require('./16a-evaluate');
 const { predictRisk } = require('./12-inference');
 const { computeMetrics, formatMetrics, safeDivide } = require('./14-metrics');
 const { buildModel, fitModel } = require('./10-model');
-const { loadModel, saveModel } = require('./11-persistence');
+const { loadModel } = require('./11-persistence');
+const { saveArtifacts } = require('./19-artifacts');
 const { classify } = require('./01-preprocess');
 const { computeRocCurve, formatRocCurve } = require('./15-roc');
 const { shuffle, stratifiedSplitCustomers } = require('./09-split');
@@ -232,8 +233,30 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   // ------------------------------------------------
   // Salvar em disco e descartar o modelo da memória
   // ------------------------------------------------
-  await saveModel(model);
+  // Não são só os pesos: junto vai o contrato que os pesos pressupõem —
+  // a escala medida NESTE treino, a ordem das features e o limiar
+  // escolhido pela matriz de custo. É o que permite que outro processo
+  // (o serviço HTTP, horas depois) normalize um cliente novo do mesmo
+  // jeito que a rede aprendeu, em vez de remedir a escala e errar em
+  // silêncio.
+  await saveArtifacts(model, {
+    source: source.id,
+    encoding: source.encoding ?? null,
+    featureNames: source.featureNames,
+    scaler,
+    threshold: chosen.threshold,
+    thresholdStrategy:
+      `menor custo (FP=${FALSE_POSITIVE_COST}, FN=${FALSE_NEGATIVE_COST})`,
+    training: {
+      customers: trainCustomers.length,
+      units,
+      l2,
+      dropout,
+    },
+  });
   console.log('Modelo salvo em:', MODEL_DIR);
+  console.log('Pacote inclui o scaler e o limiar', chosen.threshold.toFixed(4),
+    '— `npm run serve` sobe a API com eles.');
 
   model.dispose();
 

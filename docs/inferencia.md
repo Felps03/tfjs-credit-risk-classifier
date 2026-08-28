@@ -1,6 +1,6 @@
 # 🔮 Inferência, persistência e memória
 
-[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · **Inferência** · [API](api.md) · [Testes](testes.md)
+[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · **Inferência** · [Serviço](servico.md) · [API](api.md) · [Testes](testes.md)
 
 ---
 
@@ -82,7 +82,7 @@ const loadModel = async (dir = MODEL_DIR) => {
 O `main` executa o ciclo completo — salva, dá `dispose` no modelo original, recarrega e mede de novo:
 
 ```javascript
-await saveModel(model);
+await saveArtifacts(model, { source, scaler, featureNames, threshold, ... });
 model.dispose();
 
 const loadedModel = await loadModel();
@@ -93,7 +93,9 @@ predictRisk(loadedModel, newCustomer);    // mesma probabilidade, bit a bit
 
 A comparação é por igualdade exata, não por tolerância: os pesos lidos do disco são os mesmos bytes que estavam na memória, então a probabilidade tem que bater até o último dígito. Se divergir, algo se perdeu na serialização.
 
-> ⚠️ O que **não** é salvo junto: as constantes de normalização (`INCOME_MIN`, `INCOME_RANGE`, `MAX_LATE_PAYMENTS`). Elas vivem no código. Em produção, o pré-processamento precisa ser versionado junto com o modelo — carregar pesos novos com normalização antiga é uma das formas mais silenciosas de training-serving skew.
+> ✅ O pré-processamento **é** salvo junto. Esta seção já avisou, por várias versões, que carregar pesos novos com normalização antiga é uma das formas mais silenciosas de *training-serving skew* — e enquanto quem recarregava era o mesmo processo que tinha acabado de treinar, o aviso podia ficar como aviso. A [API REST](servico.md#-a-correção-o-modelo-como-pacote) acabou com esse luxo: `saveArtifacts` grava um `metadata.json` com o `scaler` medido naquele treino, a ordem exata das features e o limiar escolhido, e `loadArtifacts` **recusa** o pacote se qualquer um dos três não bater com o que o código gera hoje.
+
+> ⚠️ O que continua no código: as constantes do dataset sintético (`INCOME_MIN`, `INCOME_RANGE`, `MAX_LATE_PAYMENTS`). Ali é legítimo — nós geramos os dados, então a escala nunca foi medida, e o `scaler` daquela fonte é `null` de propósito.
 
 A pasta `/model/` está no `.gitignore`: artefato de build, não código-fonte.
 

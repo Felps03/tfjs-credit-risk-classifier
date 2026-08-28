@@ -1,6 +1,7 @@
 // --------------------------------------------------
 // 8.1 Argumentos de linha de comando
 // --------------------------------------------------
+const { API_PORT } = require('./00-constants');
 const { CV_FOLDS } = require('./17-cross-validation');
 const { DEFAULT_SOURCE_ID, SOURCES } = require('./08-sources');
 
@@ -170,8 +171,23 @@ const resolveMitigation = (argv = []) => {
   return true;
 };
 
+// `--port=0` é aceito de propósito: pede uma porta livre ao sistema, que
+// é como os testes sobem o serviço sem disputar a 3000 com nada.
+const resolvePort = (argv = []) => {
+  const port = parseNumericFlag(argv, 'port', API_PORT, 65535);
+
+  if (!Number.isInteger(port)) {
+    throw new Error(
+      `Valor inválido para --port: ${port}. Use um inteiro entre 0 e 65535.`,
+    );
+  }
+
+  return port;
+};
+
 module.exports = {
   resolveSourceId,
+  resolvePort,
   parseNumericFlag,
   resolveRegularization,
   resolveFolds,

@@ -30,6 +30,8 @@ const {
   GERMAN_COLUMNS,
   GERMAN_PRECISION,
   SHUFFLE_SEED,
+  API_PORT,
+  API_BODY_LIMIT,
 } = require('./src/00-constants');
 
 const {
@@ -102,6 +104,7 @@ const {
 
 const {
   resolveSourceId,
+  resolvePort,
   parseNumericFlag,
   resolveRegularization,
   resolveFolds,
@@ -172,6 +175,37 @@ const {
 } = require('./src/17a-architectures');
 
 const { main } = require('./src/18-main');
+
+const {
+  METADATA_FILE,
+  ARTIFACTS_VERSION,
+  PROBABILITY_DECIMALS,
+  round,
+  metadataPath,
+  assertServable,
+  saveArtifacts,
+  readMetadata,
+  assertConsistent,
+  loadArtifacts,
+} = require('./src/19-artifacts');
+
+const {
+  isNumber,
+  validateCategorical,
+  validateCustomer,
+  describeSchema,
+} = require('./src/20-contract');
+
+const {
+  scoreCustomer,
+  sendJson,
+  readJsonBody,
+  isJsonRequest,
+  createRequestListener,
+  createRoutes,
+  createApi,
+  listen,
+} = require('./src/21-api');
 
 // Só executa quando chamado direto (node index.js).
 // Ao ser importado pelos testes, apenas expõe as funções.
@@ -290,6 +324,7 @@ module.exports = {
   SOURCES,
   DEFAULT_SOURCE_ID,
   resolveSourceId,
+  resolvePort,
   parseNumericFlag,
   resolveRegularization,
   resolveMitigation,
@@ -339,4 +374,29 @@ module.exports = {
   formatArchitectureComparison,
   reportArchitectures,
   main,
+  API_PORT,
+  API_BODY_LIMIT,
+  METADATA_FILE,
+  ARTIFACTS_VERSION,
+  PROBABILITY_DECIMALS,
+  round,
+  metadataPath,
+  assertServable,
+  saveArtifacts,
+  readMetadata,
+  assertConsistent,
+  loadArtifacts,
+  isNumber,
+  validateCategorical,
+  validateCustomer,
+  describeSchema,
+  round,
+  scoreCustomer,
+  sendJson,
+  readJsonBody,
+  isJsonRequest,
+  createRequestListener,
+  createRoutes,
+  createApi,
+  listen,
 };

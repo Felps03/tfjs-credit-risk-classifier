@@ -1,12 +1,12 @@
 # ✅ Testes e solução de problemas
 
-[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · [API](api.md) · **Testes**
+[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · [Serviço](servico.md) · [API](api.md) · **Testes**
 
 ---
 
 ## Cobertura da suíte
 
-São **317 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**:
+São **368 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**:
 
 ```javascript
 it('dada a probabilidade exatamente no limiar, quando classificada, então retorna ALTO RISCO', () => {
@@ -78,6 +78,16 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | `createRegularizer`    | Lambda chega intacto na camada e `λ = 0` devolve **`null`**, não uma penalidade inerte |
 | `buildModel` — arquitetura | `HIDDEN_UNITS` é o default de fato, topologia acompanhando a lista, contagens de parâmetro exatas (`58`, `237`, `1.073`, `15.745`) e **`units: []` virando uma regressão logística de uma camada só** |
 | `resolveUnits` | Lista lida, `--units=0` pedindo a regressão logística, e **vazio, `abc`, `16,0`, `16.5`, `-8`, `2048` e nove camadas lançando** |
+| `assertServable` | Pacote completo passa; **limiar `Infinity` da ponta da curva lança** (viraria `null` no JSON e aprovaria ninguém), limiar fora de `[0, 1]` e lista de features vazia também |
+| `assertConsistent` | Versão antiga, número de entradas diferente e — o caso sutil — **as mesmas 3 features em outra ORDEM**, que passaria pelo teste de tamanho e daria previsão errada |
+| `saveArtifacts` / `readMetadata` / `loadArtifacts` | Os três arquivos no disco, ida e volta do contrato, **predição sem receber scaler nenhum**, limiar gravado já arredondado, pacote impróprio que **não chega ao disco** e pasta sem metadata instruindo `npm start` |
+| `validateCustomer` | Cliente completo, **campo ausente recusado em vez de virar `NaN`**, número como texto, código fora da lista, typo acusado **junto** com o campo que ficou ausente, corpo que não é objeto e os 19 erros de uma vez |
+| Atributo protegido na API | `personalStatus` no corpo é **recusado com motivo próprio**, não ignorado em silêncio |
+| `describeSchema` / `isNumber` / `validateCategorical` | Faixa e códigos por campo, `NaN` e `Infinity` reprovados por número, índice não inteiro recusado |
+| `scoreCustomer` | `HIGH_RISK`/`LOW_RISK`, **comportamento no limiar** (o corte usa `>=`), cauda de float32 arredondada, `400` com a lista de erros e o limiar viajando na resposta |
+| API HTTP (`200`/`400`/`404`/`405`/`413`/`415`/`500`) | Pontuação, payload inválido, **JSON malformado virando 400 e não 500**, corpo vazio, content-type errado, corpo acima do teto, rota inexistente listando as que existem, `Allow` no 405, `/health`, `/schema` e o **`500` que não vaza a mensagem interna** — tudo com um pacote de mentira, sem treinar rede nenhuma |
+| Contrato de entrada das fontes | O que a API exige é **exatamente** o que `toVector` lê: uma coluna a menos viraria `NaN`, uma a mais seria recusada |
+| `resolvePort` | Padrão, `--port=8080`, **`--port=0` aceito** (porta livre do sistema) e `99999`, `abc`, `8080.5` e vazio lançando |
 | `resolveArchitectureRun` | Ausência é `null`, `--arquiteturas` usa uma repetição, `--repeticoes=k` usa o pedido, e `--arquiteturas=5` ou `--repeticoes=0` lançam |
 | `ARCHITECTURES` / `compareArchitectures` | O piso da lista é a regressão logística, rótulos únicos, uma linha medida por arquitetura, parâmetros crescendo com a topologia e a validação cruzada informando parâmetros e épocas por dobra |
 | `buildModel` — regularização | L2 em **todas** as densas, dropout **só** depois das ocultas, `dropout: 0` restaura a topologia de 3 camadas e o total de parâmetros **não muda** |

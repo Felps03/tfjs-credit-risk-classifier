@@ -48,6 +48,7 @@ O `README` cobre o essencial: o que o projeto é, como rodar e o que ainda falta
 | **[🔁 Validação cruzada e split estratificado](docs/validacao-cruzada.md)** | Por que um hold-out não basta, o que a estratificação trava e o que k dobras mudaram na conclusão do projeto. |
 | **[⚖️ Mitigação da disparidade](docs/mitigacao.md)** | O limiar por grupo: o que ele corrige, o que ele cobra e por que o padrão é desligado. |
 | **[🔮 Inferência, persistência e memória](docs/inferencia.md)** | Prever para um cliente novo, salvar e recarregar o modelo, e o gerenciamento de tensores. |
+| **[🌐 O serviço: API REST e o pacote servido](docs/servico.md)** | O endpoint `POST /risk-score`, o `metadata.json` que impede o *training-serving skew*, a validação do payload e o campo que a API recusa. |
 | **[🧩 API do módulo e exemplo de saída](docs/api.md)** | Tudo que o `index.js` exporta, e uma execução completa comentada. |
 | **[✅ Testes e solução de problemas](docs/testes.md)** | A tabela de cobertura da suíte, alvo por alvo, e o que fazer quando o `tfjs-node` não instala. |
 
@@ -140,6 +141,30 @@ npm start -- --mitigar             # a decisão passa a ler o sexo do cliente
 
 A comparação entre as duas políticas aparece em toda execução, com ou sem a flag; o que a flag muda é qual delas decide. O padrão é **desligado**, e [a seção sobre mitigação explica por quê](docs/mitigacao.md#-mitigação-da-disparidade) — com números.
 
+Depois de treinar, o modelo pode ser **servido**. O `npm start` salva um pacote — pesos, escala medida no treino e limiar escolhido — e a API sobe a partir dele:
+
+```bash
+npm run serve                      # http://localhost:3000
+npm run serve -- --port=8080
+```
+
+```bash
+curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
+  "durationMonths": 48, "creditAmount": 9000, "installmentRate": 4,
+  "residenceSince": 2, "age": 24, "existingCredits": 2, "dependents": 1,
+  "checkingStatus": 0, "creditHistory": 1, "purpose": 0, "savingsStatus": 0,
+  "employmentYears": 1, "otherDebtors": 0, "property": 3,
+  "otherInstallments": 0, "housing": 0, "job": 1,
+  "telephone": 0, "foreignWorker": 0 }'
+```
+
+```json
+{ "riskProbability": 0.781903, "classification": "HIGH_RISK", "threshold": 0.109897,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T02:37:23.428Z" } }
+```
+
+A parte difícil de servir um modelo não é o HTTP — é que os pesos sozinhos não bastam. [A seção sobre o serviço](docs/servico.md#-o-problema-que-a-api-expõe) mostra por quê.
+
 Cada fonte declara a **sua** dose — o dataset real vem com os freios ligados, o sintético não —, e as flags sobrescrevem o que a fonte declara. Cada execução imprime `Diferença treino − teste` logo abaixo das acurácias. É o termômetro do *overfitting*, e é o número que [a regularização existe para encolher](docs/modelo.md#-regularização-l2-e-dropout).
 
 Os dados **não** mudam entre execuções, e agora nem entre máquinas: o CSV real é fixo, e o sintético é gerado por um [PRNG com semente](docs/dados-sinteticos.md#-geração-dos-dados-sintéticos) — `npm run seed` reproduz o arquivo versionado byte a byte. Os pesos iniciais da rede continuam aleatórios, então as métricas oscilam um pouco a cada rodada; é esperado, e é por isso que os números desta documentação são **médias de 15 execuções** com erro padrão.
@@ -172,10 +197,14 @@ tfjs-credit-risk-classifier/
 │   ├── 16a-evaluate.js    # baseline da classe majoritária e avaliação no teste
 │   ├── 17-cross-validation.js  # k dobras estratificadas, média e erro padrão
 │   ├── 17a-architectures.js    # comparação das oito topologias
-│   └── 18-main.js         # o fluxo completo de uma execução
+│   ├── 18-main.js         # o fluxo completo de uma execução
+│   ├── 19-artifacts.js    # o pacote servido: pesos + scaler + limiar + contrato
+│   ├── 20-contract.js     # validação do payload que chega pela API
+│   └── 21-api.js          # o servidor `node:http` e as três rotas
 ├── scripts/
 │   ├── fetch-german.js    # baixa o German Credit da UCI e converte
-│   └── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
+│   ├── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
+│   └── serve.js           # sobe a API a partir do pacote salvo
 ├── test/
 │   └── index.test.js      # testes com o runner nativo do Node
 ├── docs/                  # a documentação longa: medições, tabelas e decisões
@@ -197,7 +226,8 @@ tfjs-credit-risk-classifier/
 │   └── customers.csv      # dataset sintético versionado, reproduzível pela semente
 ├── model/                 # gerado por `npm start` — ignorado pelo git
 │   ├── model.json         # topologia + training config
-│   └── weights.bin        # pesos e estado do otimizador
+│   ├── weights.bin        # pesos e estado do otimizador
+│   └── metadata.json      # scaler, ordem das features e limiar — o contrato dos pesos
 └── README.md
 ```
 
@@ -208,7 +238,7 @@ npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
 ```
 
-São **317 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
+São **368 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
 
 > ⛔ Se o `npm install` ou o `npm start` quebrarem, o culpado quase sempre é a versão do Node: veja [Solução de problemas](docs/testes.md#-solução-de-problemas).
 
@@ -230,7 +260,6 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 | CSV sem validação de esquema, faixas ou valores ausentes        | Dado real vem com coluna faltando, texto onde deveria haver número e `NaN` |
 | Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado. A [mitigação](docs/mitigacao.md#-mitigação-da-disparidade) já faz certo — calibra no treino, audita no teste —, o ajuste do limiar ainda não |
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
-| Modelo salvo sem versionar o **scaler** junto                    | Pesos novos com pré-processamento antigo → training-serving skew |
 | `npm start` continua reportando **uma** divisão                  | O relatório completo — matriz, curva, limiar, auditoria — roda sobre um hold-out só, e a divisão fixa é reconhecidamente ruim. A estimativa honesta está a um comando de distância ([`npm run cv`](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado)), mas não é o padrão |
 | Regularização escolhida em uma grade medida no **mesmo** protocolo de avaliação | Trinta configurações comparadas sem conjunto de validação separado; o certo seria escolher em um conjunto e reportar em outro — o mesmo problema do [limiar](docs/metricas.md#-ajuste-do-limiar-de-decisão), algumas linhas acima |
 | Nenhum tratamento para o **desbalanceamento** durante o treino   | O dataset agora tem 15,8% de positivos, mas o treino não usa `classWeight`, reamostragem nem *focal loss*; a única correção aplicada é [no limiar](docs/metricas.md#-ajuste-do-limiar-de-decisão), depois do fato |
@@ -250,6 +279,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~CSV sintético gerado com `Math.random()`, irreprodutível~~ | Gerador com semente: `npm run seed` reconstrói o arquivo versionado byte a byte |
 | ~~Split simples em vez de estratificado~~ | [`stratifiedSplitCustomers`](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado): o baseline do teste passou a sair `0.7000` em **todas** as divisões |
 | ~~Sem validação cruzada~~ | `npm run cv`: k dobras estratificadas, média com erro padrão, e a auditoria de disparidade rodando sobre os 1.000 clientes |
+| ~~Modelo salvo sem versionar o scaler junto~~ | [`metadata.json`](docs/servico.md#-a-correção-o-modelo-como-pacote): escala, ordem das features e limiar viajam com os pesos, e a carga recusa o pacote se qualquer um dos três não bater |
 
 ---
 
@@ -274,54 +304,75 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 **Produto**
 - [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);
 - [x] ~~salvar e recarregar o modelo (`model.save` / `tf.loadLayersModel`)~~ — feito, veja [Persistência do modelo](docs/inferencia.md#-persistência-do-modelo);
-- [ ] API REST com endpoint `POST /risk-score`;
+- [x] ~~API REST com endpoint `POST /risk-score`~~ — feito, veja [O serviço](docs/servico.md#-o-serviço-api-rest-pacote-servido-e-contrato-de-entrada);
 - [ ] frontend para simular clientes;
-- [ ] inferência no navegador com TensorFlow.js.
+- [ ] inferência no navegador com TensorFlow.js;
+- [ ] autenticação e log estruturado das decisões servidas.
 
-### 🌐 Esboço da API
+### 🌐 A API
 
 ```http
 POST /risk-score
 Content-Type: application/json
 ```
 
+As sete numéricas em unidades brutas e as doze qualitativas como índice do código na lista da UCI — 19 campos, os mesmos 19 que viram as 57 entradas da rede:
+
 ```json
 {
-  "checkingStatus": 0, "durationMonths": 48, "creditHistory": 1, "creditAmount": 9000,
-  "savingsStatus": 0, "employmentYears": 1, "installmentRate": 4, "age": 24
+  "durationMonths": 48, "creditAmount": 9000, "installmentRate": 4,
+  "residenceSince": 2, "age": 24, "existingCredits": 2, "dependents": 1,
+
+  "checkingStatus": 0, "creditHistory": 1, "purpose": 0, "savingsStatus": 0,
+  "employmentYears": 1, "otherDebtors": 0, "property": 3,
+  "otherInstallments": 0, "housing": 0, "job": 1,
+  "telephone": 0, "foreignWorker": 0
 }
 ```
 
 ```json
-{ "riskProbability": 0.8184, "classification": "HIGH_RISK" }
+{
+  "riskProbability": 0.781903,
+  "classification": "HIGH_RISK",
+  "threshold": 0.109897,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T02:37:23.428Z" }
+}
 ```
+
+O limiar viaja na resposta porque ele é uma escolha de negócio, não uma propriedade do modelo — e não é o `0.5` herdado, é o que a [matriz de custo escolheu](docs/metricas.md#-ajuste-do-limiar-de-decisão).
 
 ```mermaid
 flowchart LR
-    A(["🖥️ Frontend"]) --> B["🌐 API Node.js<br/>POST /risk-score"]
-    B --> C["⚙️ Pré-processamento<br/>mesma normalização do treino"]
+    A(["🖥️ Cliente HTTP"]) --> B["🌐 API node:http<br/>POST /risk-score"]
+    B --> V{"🛡️ Contrato<br/>19 campos válidos?"}
+    V -->|"não"| X(["📤 400<br/>lista de erros"])
+    V -->|"sim"| C["⚙️ Pré-processamento<br/>scaler do metadata.json"]
     C --> D["🧠 Modelo carregado<br/>tf.loadLayersModel"]
-    D --> E["📈 Probabilidade<br/>0.9142"]
-    E --> F(["📤 Resposta JSON<br/>HIGH_RISK"])
+    D --> E["📈 Probabilidade<br/>0.781903"]
+    E --> F(["📤 200<br/>HIGH_RISK"])
 
     classDef edge fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
     classDef step fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#1e293b
     classDef key  fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
+    classDef bad  fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
 
     class A,F edge
     class B,D,E step
-    class C key
+    class C,V key
+    class X bad
 ```
 
-O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização** do treino. Divergência entre treino e inferência (*training-serving skew*) é uma das falhas mais comuns em ML em produção.
+O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização** do treino. Divergência entre treino e inferência (*training-serving skew*) é uma das falhas mais comuns em ML em produção, e a pior característica dela é não dar erro — a rede recebe números que não significam o que os pesos aprenderam, devolve uma probabilidade plausível, e o serviço responde `200 OK`.
 
-Com o dataset real isso ficou mais concreto: a escala não é mais um punhado de constantes no código, e sim um `scaler` **medido** durante o treino. Ou ele é salvo junto com os pesos, ou o serviço normaliza diferente do que a rede aprendeu.
+Por isso o `npm start` não salva mais só os pesos. Ele salva um **pacote**: `model.json`, `weights.bin` e um `metadata.json` com o `scaler` medido naquele treino, a ordem exata das 57 features e o limiar escolhido. Na subida, o serviço **recusa** o pacote se a rede esperar outro número de entradas ou se a lista de features gravada não bater com a que o código gera hoje — o caso em que o tamanho do vetor continua certo e o significado de cada posição, não.
+
+E a validação do payload, que o CSV nunca precisou ter, aqui é obrigatória: um `age` ausente viraria `NaN`, e `NaN >= limiar` é `false` — o cliente sairia classificado como baixo risco por não ter mandado a idade. [Os detalhes estão na documentação do serviço](docs/servico.md#-por-que-validar-se-o-csv-nunca-foi-validado), inclusive por que `personalStatus` é recusado em vez de ignorado, e por que a API serve só a política de limiar único.
 
 ---
 
 ## 📚 Conceitos demonstrados
 
-`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `One-hot encoding` · `Dummy variable trap` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Ruído de medição` · `Ruído de rótulo` · `Erro irredutível` · `Box-Muller` · `PRNG com semente` · `Quantil` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Validação cruzada k-fold` · `Amostragem estratificada` · `Regularização L2` · `Dropout` · `Fairness` · `Disparate impact` · `Regra dos quatro quintos` · `Paridade demográfica` · `Igualdade de erros` · `Mitigação por pós-processamento` · `Limiar por grupo` · `Inferência` · `Gerenciamento de tensores` · `Testes automatizados`
+`Redes neurais` · `Perceptron` · `MLP` · `Dense Layers` · `ReLU` · `Sigmoid` · `Classificação binária` · `Binary Crossentropy` · `Adam` · `Learning rate` · `Batch size` · `Epoch` · `Train/Validation/Test` · `Early Stopping` · `Overfitting` · `Normalização` · `Min-max scaling` · `Data leakage` · `Codificação ordinal` · `One-hot encoding` · `Dummy variable trap` · `Baseline da classe majoritária` · `Desbalanceamento de classes` · `Ruído de medição` · `Ruído de rótulo` · `Erro irredutível` · `Box-Muller` · `PRNG com semente` · `Quantil` · `Matriz de confusão` · `Precision/Recall/F1` · `Curva ROC` · `AUC` · `Matriz de custo` · `Ajuste de limiar` · `Reprodutibilidade` · `Validação cruzada k-fold` · `Amostragem estratificada` · `Regularização L2` · `Dropout` · `Fairness` · `Disparate impact` · `Regra dos quatro quintos` · `Paridade demográfica` · `Igualdade de erros` · `Mitigação por pós-processamento` · `Limiar por grupo` · `Inferência` · `Gerenciamento de tensores` · `Model serving` · `Training-serving skew` · `Versionamento de artefatos` · `Validação de esquema` · `API REST` · `Testes automatizados`
 
 ---
 

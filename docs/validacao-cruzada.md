@@ -1,6 +1,6 @@
 # 🔁 Validação cruzada e split estratificado
 
-[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · **Validação cruzada** · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · [API](api.md) · [Testes](testes.md)
+[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · **Validação cruzada** · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · [Serviço](servico.md) · [API](api.md) · [Testes](testes.md)
 
 ---
 

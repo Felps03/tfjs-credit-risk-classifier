@@ -173,6 +173,15 @@ const GERMAN_PRECISION = Object.fromEntries(
   GERMAN_COLUMNS.map((column) => [column, 0]),
 );
 
+// --------------------------------------------------
+// Serviço HTTP
+// --------------------------------------------------
+// Porta padrão do `npm run serve`, e o teto do corpo da requisição.
+// Um cliente do German Credit tem 19 campos: 16 KB é folga de sobra e
+// ainda assim recusa um POST de 50 MB antes de ele virar memória.
+const API_PORT = 3000;
+const API_BODY_LIMIT = 16 * 1024;
+
 // Semente do embaralhamento. Fixa de propósito: sem ela cada execução
 // mediria um recorte diferente do dataset e nenhum número deste projeto
 // se reproduziria. Trocar a semente é trocar o experimento.
@@ -206,4 +215,6 @@ module.exports = {
   GERMAN_COLUMNS,
   GERMAN_PRECISION,
   SHUFFLE_SEED,
+  API_PORT,
+  API_BODY_LIMIT,
 };

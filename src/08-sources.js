@@ -6,6 +6,7 @@ const {
   CSV_PRECISION,
   DROPOUT_RATE,
   GERMAN_AUDIT_COLUMN,
+  GERMAN_CATEGORICAL,
   GERMAN_COLUMNS,
   GERMAN_CSV_PATH,
   GERMAN_NUMERIC,
@@ -39,6 +40,11 @@ const SYNTHETIC_SOURCE = {
 
   ensure: () => ensureCsv(),
   read: () => readCustomersCsv(CSV_PATH),
+
+  // O que um cliente novo precisa trazer para ser pontuado. Aqui as
+  // quatro colunas são todas numéricas e nenhuma é proibida — a fonte
+  // sintética não tem atributo protegido para proteger.
+  requestSchema: { numeric: CSV_COLUMNS.slice(0, -1), categorical: {}, rejected: [] },
 
   // A escala é CONHECIDA porque nós geramos os dados: "ajustar" aqui é
   // devolver as constantes, e o argumento é ignorado de propósito.
@@ -95,6 +101,20 @@ const createGermanSource = ({
     return { path: filePath, created: false };
   },
   read: () => readCustomersCsv(GERMAN_CSV_PATH),
+
+  // O contrato de entrada de um cliente novo: as sete numéricas em
+  // unidades BRUTAS (meses, reais, anos) e as doze qualitativas como
+  // índice do código na lista da UCI.
+  //
+  // `personalStatus` aparece em `rejected`, não em `categorical`, e a
+  // diferença importa: ele não é uma coluna que o serviço esqueceu de
+  // aceitar, é uma coluna que o serviço RECUSA. Ignorá-lo em silêncio
+  // deixaria quem chama achando que mandou algo que foi usado.
+  requestSchema: {
+    numeric: GERMAN_NUMERIC,
+    categorical: GERMAN_CATEGORICAL,
+    rejected: [GERMAN_AUDIT_COLUMN],
+  },
 
   // Só as numéricas passam pelo min-max: escalar um código de categoria
   // seria escalar um rótulo.

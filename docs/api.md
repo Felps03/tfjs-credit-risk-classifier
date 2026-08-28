@@ -1,6 +1,6 @@
 # 🧩 API do módulo e exemplo de saída
 
-[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · **API** · [Testes](testes.md)
+[⬅️ README](../README.md) · [Dados](dados-sinteticos.md) · [German Credit](german-credit.md) · [Modelo](modelo.md) · [Métricas](metricas.md) · [Validação cruzada](validacao-cruzada.md) · [Mitigação](mitigacao.md) · [Inferência](inferencia.md) · [Serviço](servico.md) · **API** · [Testes](testes.md)
 
 ---
 
@@ -14,7 +14,7 @@ if (require.main === module) {
   const run = async () => main(resolveSourceId(argv), {
     ...resolveRegularization(argv),
     mitigate: resolveMitigation(argv),
-  });
+  });   // simplificado: o arquivo também trata --cv, --units e --arquiteturas
 
   run().catch((error) => {
     console.error(`\n${error.message}\n`);
@@ -94,6 +94,12 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `buildModel` | função | Monta e compila a rede: entradas da fonte, camadas ocultas e os dois freios. Com `units: []` devolve uma **regressão logística** |
 | `saveModel` | função async | Salva o modelo em `file://<dir>` com o otimizador |
 | `loadModel` | função async | Carrega de `model.json` e garante que vem compilado |
+| `saveArtifacts` | função async | Salva o **pacote**: pesos + `metadata.json` com scaler, ordem das features e limiar. É o que `main` usa |
+| `readMetadata` | função | Lê o `metadata.json` do pacote; instrui a rodar `npm start` se faltar |
+| `assertServable` | função | Recusa gravar um pacote sem contrato ou com limiar fora de `[0, 1]` — inclusive o `Infinity` da ponta da curva |
+| `assertConsistent` | função | Recusa carregar um pacote cuja versão, número de entradas ou **ordem de features** não bata com o código |
+| `loadArtifacts` | função async | Pacote → `{ model, metadata, source, toVector, predict, dispose }`, com a normalização já embutida |
+| `ARTIFACTS_VERSION`, `METADATA_FILE`, `metadataPath`, `PROBABILITY_DECIMALS`, `round` | constantes / funções | Formato do pacote e o arredondamento comum ao limiar gravado e à resposta servida |
 | `predictRisk` | função | Cliente bruto → probabilidade, já liberando os tensores |
 | `computeConfusionMatrix` | função | `{ truePositives, trueNegatives, falsePositives, falseNegatives, matrix }` |
 | `formatConfusionMatrix` | função | Matriz → tabela alinhada para o terminal |
@@ -120,6 +126,14 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `formatArchitectureComparison` | função | Comparação → tabela com parâmetros, épocas e métricas com erro padrão |
 | `reportArchitectures` | função async | Caminho de execução de `--arquiteturas`: roda e imprime |
 | `main` | função async | Pipeline completo para uma fonte: treina, avalia, salva, recarrega e prevê |
+| `validateCustomer` | função | Payload + schema → `{ errors, customer }`; devolve **todos** os erros de uma vez |
+| `validateCategorical`, `isNumber` | funções | As duas checagens elementares: índice de código válido, e número que não é `NaN` nem `Infinity` |
+| `describeSchema` | função | Schema interno → contrato publicável, com faixa e códigos por campo (é o `GET /schema`) |
+| `scoreCustomer` | função | `{ predict, threshold, schema, metadata }` → função que transforma um payload em `{ status, body }`. **Não** conhece tensor, scaler nem codificação: é o que torna a API testável sem treinar |
+| `createRoutes`, `createApi`, `createRequestListener` | funções | As três rotas, o servidor `node:http` e o roteador com `404`/`405`/`500` |
+| `readJsonBody`, `isJsonRequest`, `sendJson` | funções | Corpo com teto de 16 KB, checagem de `content-type` e resposta JSON |
+| `listen` | função async | `server.listen` promisificado; devolve a porta **real** (importa com `--port=0`) |
+| `API_PORT`, `API_BODY_LIMIT`, `resolvePort` | constantes / função | Porta padrão `3000`, teto do corpo e leitura de `--port=` |
 
 ---
 

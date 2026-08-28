@@ -115,6 +115,26 @@ const {
   rocFromScores,
   TRAINING,
   majorityBaseline,
+  API_PORT,
+  API_BODY_LIMIT,
+  ARTIFACTS_VERSION,
+  METADATA_FILE,
+  metadataPath,
+  assertServable,
+  assertConsistent,
+  saveArtifacts,
+  readMetadata,
+  loadArtifacts,
+  validateCustomer,
+  validateCategorical,
+  describeSchema,
+  isNumber,
+  scoreCustomer,
+  isJsonRequest,
+  createRoutes,
+  createApi,
+  listen,
+  resolvePort,
 } = require('../index');
 
 // ==================================================
@@ -3582,13 +3602,27 @@ describe('SOURCES / resolveSourceId', () => {
     const obrigatorios = [
       'id', 'label', 'csvPath', 'columns', 'precision', 'featureNames',
       'ensure', 'read', 'fitScaler', 'toVector', 'sampleCustomer',
-      'regularization',
+      'regularization', 'requestSchema',
     ];
 
     // When / Then
     Object.values(SOURCES).forEach((source) => {
       const faltando = obrigatorios.filter((chave) => source[chave] === undefined);
       assert.deepEqual(faltando, [], `fonte ${source.id} não cumpre o contrato`);
+    });
+  });
+
+  it('dado o contrato de entrada de cada fonte, quando conferido, então cobre o cliente de exemplo', () => {
+    // Given — o que a API exige precisa ser exatamente o que `toVector` lê;
+    // uma coluna a menos aqui viraria NaN na rede, uma a mais seria recusada
+    Object.values(SOURCES).forEach((source) => {
+      const { numeric, categorical, rejected } = source.requestSchema;
+      const pedidos = [...numeric, ...Object.keys(categorical)].sort();
+      const noExemplo = Object.keys(source.sampleCustomer)
+        .filter((campo) => !rejected.includes(campo))
+        .sort();
+
+      assert.deepEqual(pedidos, noExemplo, `fonte ${source.id}`);
     });
   });
 
@@ -4219,5 +4253,579 @@ describe('createGermanSource', () => {
   it('dada a variante ordinal, quando registrada, então está disponível por --source', () => {
     // Given / When / Then
     assert.equal(resolveSourceId(['--source=german-ordinal']), 'german-ordinal');
+  });
+});
+
+// ==================================================
+// API REST: pacote servido, contrato e endpoint
+// ==================================================
+describe('assertServable', () => {
+  const valido = {
+    source: 'german',
+    featureNames: ['age'],
+    threshold: 0.3,
+  };
+
+  it('dado um pacote completo, quando conferido, então não lança', () => {
+    // Given / When / Then
+    assert.doesNotThrow(() => assertServable(valido));
+  });
+
+  it('dado o limiar Infinity da ponta da curva, quando conferido, então lança', () => {
+    // Given — `JSON.stringify(Infinity)` é `null`, e `p >= null` é `p >= 0`:
+    // gravar assim faria TODO cliente sair como alto risco em silêncio
+    assert.throws(
+      () => assertServable({ ...valido, threshold: Infinity }),
+      /Limiar impróprio/,
+    );
+  });
+
+  it('dado um limiar fora de [0, 1], quando conferido, então lança', () => {
+    // Given — nenhuma probabilidade alcança um corte assim
+    assert.throws(() => assertServable({ ...valido, threshold: 1.5 }), /Limiar impróprio/);
+    assert.throws(() => assertServable({ ...valido, threshold: -0.1 }), /Limiar impróprio/);
+  });
+
+  it('dado um pacote sem features, quando conferido, então lança', () => {
+    // Given — pesos sem lista de features são números sem contrato
+    assert.throws(
+      () => assertServable({ ...valido, featureNames: [] }),
+      /sem contrato/,
+    );
+  });
+});
+
+describe('assertConsistent', () => {
+  // Modelo de mentira: `assertConsistent` só olha o formato da entrada.
+  const modelo = (entradas) => ({ inputs: [{ shape: [null, entradas] }] });
+  const metadata = {
+    version: ARTIFACTS_VERSION,
+    featureNames: ['a', 'b', 'c'],
+  };
+  const fonte = { featureNames: ['a', 'b', 'c'] };
+
+  it('dado um pacote coerente, quando conferido, então não lança', () => {
+    // Given / When / Then
+    assert.doesNotThrow(() => assertConsistent(modelo(3), metadata, fonte));
+  });
+
+  it('dada uma versão de pacote antiga, quando conferida, então lança', () => {
+    // Given — recusar é melhor que interpretar um formato que mudou
+    assert.throws(
+      () => assertConsistent(modelo(3), { ...metadata, version: 0 }, fonte),
+      /Retreine/,
+    );
+  });
+
+  it('dada uma rede com outro número de entradas, quando conferida, então lança', () => {
+    // Given / When / Then
+    assert.throws(
+      () => assertConsistent(modelo(57), metadata, fonte),
+      /A rede espera 57 entradas/,
+    );
+  });
+
+  it('dadas features na mesma quantidade mas em outra ORDEM, quando conferidas, então lança', () => {
+    // Given — o caso perigoso: o vetor continua com 3 posições, mas cada
+    // posição passou a significar outra coisa para os mesmos pesos
+    assert.throws(
+      () => assertConsistent(modelo(3), metadata, { featureNames: ['c', 'b', 'a'] }),
+      /features mudaram/,
+    );
+  });
+});
+
+describe('saveArtifacts / readMetadata / loadArtifacts', () => {
+  let dir;
+
+  before(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-'));
+  });
+
+  after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('dado um modelo e seu contrato, quando salvos, então o pacote tem os três arquivos', async () => {
+    // Given — a fonte sintética tem 4 features e dispensa treino
+    const model = buildModel(SYNTHETIC_SOURCE.featureNames.length);
+
+    // When
+    const record = await saveArtifacts(model, {
+      source: SYNTHETIC_SOURCE.id,
+      encoding: null,
+      featureNames: SYNTHETIC_SOURCE.featureNames,
+      scaler: null,
+      threshold: 0.42,
+    }, dir);
+
+    model.dispose();
+
+    // Then
+    assert.ok(fs.existsSync(path.join(dir, 'model.json')));
+    assert.ok(fs.existsSync(path.join(dir, 'weights.bin')));
+    assert.ok(fs.existsSync(metadataPath(dir)));
+    assert.equal(record.version, ARTIFACTS_VERSION);
+    assert.equal(metadataPath(dir), path.join(dir, METADATA_FILE));
+  });
+
+  it('dado o pacote salvo, quando o metadata é lido, então traz fonte, features e limiar', () => {
+    // Given / When
+    const metadata = readMetadata(dir);
+
+    // Then
+    assert.equal(metadata.source, SYNTHETIC_SOURCE.id);
+    assert.deepEqual(metadata.featureNames, SYNTHETIC_SOURCE.featureNames);
+    assert.equal(metadata.threshold, 0.42);
+    assert.ok(Date.parse(metadata.savedAt) > 0);
+  });
+
+  it('dado o pacote salvo, quando recarregado, então prevê sem receber scaler nenhum', async () => {
+    // Given — é o ponto todo: quem serve não sabe que existe normalização
+    const artifacts = await loadArtifacts(dir);
+
+    // When
+    const probability = artifacts.predict(SYNTHETIC_SOURCE.sampleCustomer);
+
+    // Then
+    assert.ok(probability >= 0 && probability <= 1);
+    assert.equal(artifacts.metadata.threshold, 0.42);
+    assert.equal(artifacts.source.id, SYNTHETIC_SOURCE.id);
+
+    artifacts.dispose();
+  });
+
+  it('dado um limiar da ponta da curva, quando salvo, então nem chega ao disco', async () => {
+    // Given
+    const model = buildModel(SYNTHETIC_SOURCE.featureNames.length);
+    const outro = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-ruim-'));
+
+    // When / Then
+    await assert.rejects(
+      () => saveArtifacts(model, {
+        source: SYNTHETIC_SOURCE.id,
+        featureNames: SYNTHETIC_SOURCE.featureNames,
+        threshold: Infinity,
+      }, outro),
+      /Limiar impróprio/,
+    );
+
+    assert.equal(fs.existsSync(metadataPath(outro)), false);
+
+    model.dispose();
+    fs.rmSync(outro, { recursive: true, force: true });
+  });
+
+  it('dado o limiar cru da curva, quando gravado, então vem arredondado na mesma escala da resposta', async () => {
+    // Given — o número do pacote precisa ser o MESMO que decide e que
+    // aparece no JSON, ou a fronteira produz resposta contraditória
+    const model = buildModel(SYNTHETIC_SOURCE.featureNames.length);
+    const outro = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-round-'));
+
+    // When
+    const record = await saveArtifacts(model, {
+      source: SYNTHETIC_SOURCE.id,
+      featureNames: SYNTHETIC_SOURCE.featureNames,
+      threshold: 0.14885064959526062,
+    }, outro);
+
+    // Then
+    assert.equal(record.threshold, 0.148851);
+    assert.equal(readMetadata(outro).threshold, 0.148851);
+
+    model.dispose();
+    fs.rmSync(outro, { recursive: true, force: true });
+  });
+
+  it('dada uma pasta sem metadata, quando lida, então instrui a rodar o npm start', () => {
+    // Given — mensagem acionável em vez de ENOENT
+    assert.throws(
+      () => readMetadata(path.join(os.tmpdir(), 'nao-existe-mesmo')),
+      /npm start/,
+    );
+  });
+});
+
+describe('validateCustomer', () => {
+  const schema = GERMAN_SOURCE.requestSchema;
+  const completo = () => {
+    const { [GERMAN_AUDIT_COLUMN]: protegido, ...resto } = GERMAN_SOURCE.sampleCustomer;
+
+    return resto;
+  };
+
+  it('dado um cliente completo, quando validado, então não há erros', () => {
+    // Given / When
+    const { errors, customer } = validateCustomer(completo(), schema);
+
+    // Then
+    assert.deepEqual(errors, []);
+    assert.equal(Object.keys(customer).length, 19);
+  });
+
+  it('dado um campo ausente, quando validado, então é recusado em vez de virar NaN', () => {
+    // Given — `undefined - min / range` é NaN, e `NaN >= limiar` é false:
+    // o cliente sairia como BAIXO RISCO por não ter mandado a idade
+    const { age, ...semIdade } = completo();
+
+    // When
+    const { errors, customer } = validateCustomer(semIdade, schema);
+
+    // Then
+    assert.equal(customer, null);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /`age`.*ausente/);
+  });
+
+  it('dado um número escrito como texto, quando validado, então é recusado', () => {
+    // Given — "48" atravessaria a coerção em quase toda conta
+    const { errors } = validateCustomer({ ...completo(), durationMonths: '48' }, schema);
+
+    // Then
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /`durationMonths`.*"48" \(string\)/);
+  });
+
+  it('dado um código categórico fora da lista, quando validado, então diz quais valem', () => {
+    // Given / When
+    const { errors } = validateCustomer({ ...completo(), purpose: 99 }, schema);
+
+    // Then
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /entre 0 e 9/);
+    assert.match(errors[0], /A410/);
+  });
+
+  it('dado um campo com typo, quando validado, então acusa o desconhecido E o ausente', () => {
+    // Given — sem a checagem de campo desconhecido, o typo viraria
+    // silenciosamente o caso do campo ausente
+    const { durationMonths, ...resto } = completo();
+
+    // When
+    const { errors } = validateCustomer({ ...resto, durationMonth: 48 }, schema);
+
+    // Then
+    assert.equal(errors.length, 2);
+    assert.ok(errors.some((erro) => /`durationMonths`.*ausente/.test(erro)));
+    assert.ok(errors.some((erro) => /`durationMonth`.*desconhecido/.test(erro)));
+  });
+
+  it('dado o atributo protegido no corpo, quando validado, então é recusado com motivo próprio', () => {
+    // Given — não é um campo esquecido, é um campo que o serviço RECUSA
+    const payload = { ...completo(), [GERMAN_AUDIT_COLUMN]: 1 };
+
+    // When
+    const { errors } = validateCustomer(payload, schema);
+
+    // Then
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /atributo protegido/);
+  });
+
+  it('dado um corpo que não é objeto, quando validado, então para na primeira checagem', () => {
+    // Given / When / Then
+    [null, [], 'texto', 42].forEach((corpo) => {
+      const { errors, customer } = validateCustomer(corpo, schema);
+
+      assert.equal(customer, null);
+      assert.equal(errors.length, 1);
+      assert.match(errors[0], /objeto JSON/);
+    });
+  });
+
+  it('dados vários problemas de uma vez, quando validados, então todos são reportados', () => {
+    // Given — quem integra corrige a lista inteira em uma passada
+    const { errors } = validateCustomer({}, schema);
+
+    // Then — 7 numéricas + 12 qualitativas
+    assert.equal(errors.length, 19);
+  });
+
+  it('dada a fonte sintética, quando validada, então cobre as quatro colunas dela', () => {
+    // Given / When
+    const { errors, customer } = validateCustomer(
+      SYNTHETIC_SOURCE.sampleCustomer,
+      SYNTHETIC_SOURCE.requestSchema,
+    );
+
+    // Then
+    assert.deepEqual(errors, []);
+    assert.deepEqual(Object.keys(customer).sort(), SYNTHETIC_SOURCE.featureNames.slice().sort());
+  });
+});
+
+describe('isNumber / validateCategorical / describeSchema', () => {
+  it('dado NaN ou Infinity, quando checados, então não passam por número', () => {
+    // Given — os dois atravessariam `typeof value === "number"`
+    assert.equal(isNumber(NaN), false);
+    assert.equal(isNumber(Infinity), false);
+    assert.equal(isNumber(0), true);
+  });
+
+  it('dado um índice não inteiro, quando validado como código, então é recusado', () => {
+    // Given / When / Then
+    assert.ok(validateCategorical('purpose', 1.5, ['A40', 'A41']));
+    assert.equal(validateCategorical('purpose', 1, ['A40', 'A41']), null);
+  });
+
+  it('dado o schema da fonte real, quando publicado, então traz faixa e códigos por campo', () => {
+    // Given / When
+    const publicado = describeSchema(GERMAN_SOURCE.requestSchema);
+
+    // Then
+    assert.deepEqual(publicado.numeric, GERMAN_NUMERIC);
+    assert.deepEqual(publicado.categorical.telephone, {
+      range: [0, 1],
+      codes: ['A191', 'A192'],
+    });
+    assert.deepEqual(publicado.rejected, [GERMAN_AUDIT_COLUMN]);
+  });
+});
+
+describe('scoreCustomer', () => {
+  // Pontuação injetada: o endpoint não precisa de rede treinada para ser
+  // testado, e é por isso que `predict` entra como argumento.
+  const build = (probability) => scoreCustomer({
+    predict: () => probability,
+    threshold: 0.3,
+    schema: SYNTHETIC_SOURCE.requestSchema,
+    metadata: { source: 'synthetic', featureNames: ['a'], savedAt: 'agora' },
+  });
+  const cliente = SYNTHETIC_SOURCE.sampleCustomer;
+
+  it('dada uma probabilidade acima do limiar, quando pontuada, então classifica HIGH_RISK', () => {
+    // Given / When
+    const { status, body } = build(0.9)(cliente);
+
+    // Then
+    assert.equal(status, 200);
+    assert.equal(body.classification, 'HIGH_RISK');
+    assert.equal(body.riskProbability, 0.9);
+    assert.equal(body.threshold, 0.3);
+  });
+
+  it('dada uma probabilidade abaixo do limiar, quando pontuada, então classifica LOW_RISK', () => {
+    // Given / When / Then
+    assert.equal(build(0.1)(cliente).body.classification, 'LOW_RISK');
+  });
+
+  it('dada a probabilidade exatamente no limiar, quando pontuada, então é HIGH_RISK', () => {
+    // Given — o corte usa >=, igual ao `classify` do laboratório
+    assert.equal(build(0.3)(cliente).body.classification, 'HIGH_RISK');
+  });
+
+  it('dada uma probabilidade com cauda de float32, quando pontuada, então sai arredondada', () => {
+    // Given / When
+    const { body } = build(0.7411802411079407)(cliente);
+
+    // Then
+    assert.equal(body.riskProbability, 0.74118);
+  });
+
+  it('dado um corpo inválido, quando pontuado, então devolve 400 com a lista de erros', () => {
+    // Given / When
+    const { status, body } = build(0.9)({ income: 'muito' });
+
+    // Then
+    assert.equal(status, 400);
+    assert.ok(body.details.length > 0);
+    assert.equal(body.riskProbability, undefined);
+  });
+
+  it('dado o limiar do pacote, quando respondido, então ele viaja junto', () => {
+    // Given — `0.31` não significa nada sem o corte que o classifica
+    assert.equal(build(0.9)(cliente).body.threshold, 0.3);
+  });
+});
+
+describe('isJsonRequest', () => {
+  it('dado application/json com charset, quando checado, então é aceito', () => {
+    // Given / When / Then
+    assert.equal(
+      isJsonRequest({ headers: { 'content-type': 'application/json; charset=utf-8' } }),
+      true,
+    );
+  });
+
+  it('dado outro content-type ou nenhum, quando checado, então é recusado', () => {
+    // Given / When / Then
+    assert.equal(isJsonRequest({ headers: { 'content-type': 'text/plain' } }), false);
+    assert.equal(isJsonRequest({ headers: {} }), false);
+  });
+});
+
+describe('API HTTP', () => {
+  let server;
+  let base;
+
+  // Pacote de mentira: as rotas só dependem de `metadata`, `predict` e
+  // `source`, então a API inteira é testável sem treinar nada.
+  const artifacts = {
+    metadata: {
+      source: 'synthetic',
+      encoding: null,
+      featureNames: SYNTHETIC_SOURCE.featureNames,
+      threshold: 0.3,
+      savedAt: '2026-01-01T00:00:00.000Z',
+    },
+    source: SYNTHETIC_SOURCE,
+    predict: () => 0.9,
+  };
+
+  const post = (body, headers = { 'content-type': 'application/json' }) =>
+    fetch(`${base}/risk-score`, { method: 'POST', headers, body });
+
+  before(async () => {
+    server = createApi(artifacts);
+    base = `http://localhost:${await listen(server, 0)}`;
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it('dado um cliente válido, quando postado, então responde 200 com a pontuação', async () => {
+    // Given / When
+    const response = await post(JSON.stringify(SYNTHETIC_SOURCE.sampleCustomer));
+    const body = await response.json();
+
+    // Then
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+    assert.equal(body.classification, 'HIGH_RISK');
+    assert.equal(body.riskProbability, 0.9);
+  });
+
+  it('dado um corpo inválido, quando postado, então responde 400 com os detalhes', async () => {
+    // Given / When
+    const response = await post(JSON.stringify({ income: 'muito' }));
+
+    // Then
+    assert.equal(response.status, 400);
+    assert.ok((await response.json()).details.length > 0);
+  });
+
+  it('dado JSON malformado, quando postado, então responde 400 em vez de 500', async () => {
+    // Given / When
+    const response = await post('{"income":');
+
+    // Then
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /JSON inválido/);
+  });
+
+  it('dado um corpo vazio, quando postado, então responde 400', async () => {
+    // Given / When / Then
+    assert.equal((await post('')).status, 400);
+  });
+
+  it('dado outro content-type, quando postado, então responde 415', async () => {
+    // Given — quase sempre é JSON com o cabeçalho esquecido
+    const response = await post('{}', { 'content-type': 'text/plain' });
+
+    // Then
+    assert.equal(response.status, 415);
+  });
+
+  it('dado um corpo acima do teto, quando postado, então responde 413 sem virar memória', async () => {
+    // Given — a validação de esquema não protege contra o que nem chega
+    // a ser um objeto
+    const gigante = JSON.stringify({ nota: 'x'.repeat(API_BODY_LIMIT + 1) });
+
+    // When / Then
+    assert.equal((await post(gigante)).status, 413);
+  });
+
+  it('dada uma rota desconhecida, quando pedida, então responde 404 listando as que existem', async () => {
+    // Given / When
+    const response = await fetch(`${base}/xpto`);
+    const body = await response.json();
+
+    // Then
+    assert.equal(response.status, 404);
+    assert.ok(body.routes.some((rota) => rota.includes('/risk-score')));
+  });
+
+  it('dado o método errado, quando usado, então responde 405 com o cabeçalho Allow', async () => {
+    // Given / When
+    const response = await fetch(`${base}/risk-score`, { method: 'GET' });
+
+    // Then
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('allow'), 'POST');
+  });
+
+  it('dado GET /health, quando pedido, então descreve o pacote carregado', async () => {
+    // Given / When
+    const body = await (await fetch(`${base}/health`)).json();
+
+    // Then
+    assert.equal(body.status, 'ok');
+    assert.equal(body.model.features, SYNTHETIC_SOURCE.featureNames.length);
+    assert.equal(body.model.savedAt, artifacts.metadata.savedAt);
+  });
+
+  it('dado GET /schema, quando pedido, então publica o contrato de entrada', async () => {
+    // Given — descobrir o contrato batendo no 400 é um jeito ruim de integrar
+    const body = await (await fetch(`${base}/schema`)).json();
+
+    // Then
+    assert.deepEqual(body.request.numeric, SYNTHETIC_SOURCE.featureNames);
+    assert.equal(body.threshold, 0.3);
+  });
+
+  it('dado um erro dentro do handler, quando ele estoura, então responde 500 sem vazar a stack', async () => {
+    // Given — devolver a stack entregaria caminho de arquivo e versões
+    const quebrado = createApi({
+      ...artifacts,
+      predict: () => { throw new Error('segredo interno'); },
+    });
+    const url = `http://localhost:${await listen(quebrado, 0)}/risk-score`;
+
+    // When
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(SYNTHETIC_SOURCE.sampleCustomer),
+    });
+    const body = await response.json();
+
+    // Then
+    assert.equal(response.status, 500);
+    assert.equal(body.error, 'Erro interno.');
+    assert.equal(JSON.stringify(body).includes('segredo interno'), false);
+
+    await new Promise((resolve) => quebrado.close(resolve));
+  });
+
+  it('dadas as rotas montadas, quando conferidas, então são exatamente as três publicadas', async () => {
+    // Given / When / Then
+    assert.deepEqual(
+      Object.keys(createRoutes(artifacts)).sort(),
+      ['/health', '/risk-score', '/schema'],
+    );
+  });
+});
+
+describe('resolvePort', () => {
+  it('dado nenhum argumento, quando resolvido, então usa a porta padrão', () => {
+    // Given / When / Then
+    assert.equal(resolvePort([]), API_PORT);
+  });
+
+  it('dado --port=8080, quando resolvido, então usa o pedido', () => {
+    // Given / When / Then
+    assert.equal(resolvePort(['--port=8080']), 8080);
+  });
+
+  it('dado --port=0, quando resolvido, então aceita: é a porta livre do sistema', () => {
+    // Given — é assim que os testes sobem o serviço sem disputar a 3000
+    assert.equal(resolvePort(['--port=0']), 0);
+  });
+
+  it('dada uma porta inválida, quando resolvida, então lança', () => {
+    // Given / When / Then
+    assert.throws(() => resolvePort(['--port=99999']), /Valor inválido/);
+    assert.throws(() => resolvePort(['--port=abc']), /Valor inválido/);
+    assert.throws(() => resolvePort(['--port=8080.5']), /Valor inválido/);
+    assert.throws(() => resolvePort(['--port=']), /Valor inválido/);
   });
 });

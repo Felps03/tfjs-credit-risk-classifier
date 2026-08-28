@@ -12,6 +12,7 @@
     "cv:synthetic": "node index.js --source=synthetic --cv",
     "arquiteturas": "node index.js --arquiteturas",
     "arquiteturas:synthetic": "node index.js --source=synthetic --arquiteturas",
+    "serve": "node scripts/serve.js",
     "fetch:german": "node scripts/fetch-german.js",
     "seed": "node scripts/seed.js",
     "test": "node --test",
@@ -40,7 +41,9 @@
     "algorithmic-bias",
     "cross-validation",
     "stratified-sampling",
-    "bias-mitigation"
+    "bias-mitigation",
+    "rest-api",
+    "model-serving"
   ],
   "author": {
     "name": "felpsdev03",
