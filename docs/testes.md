@@ -6,7 +6,7 @@
 
 ## Cobertura da suíte
 
-São **368 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**:
+São **403 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**:
 
 ```javascript
 it('dada a probabilidade exatamente no limiar, quando classificada, então retorna ALTO RISCO', () => {

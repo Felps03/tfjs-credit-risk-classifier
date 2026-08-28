@@ -22,7 +22,14 @@ const trilha = (item) => el('div', { class: 'result__track', attrs: { 'aria-hidd
     ? el('div', {
       class: 'result__marker',
       attrs: { style: `--at: ${item.marker.value * 100}%` },
-    }, [el('span', { class: 'result__marker-label', text: item.marker.label })])
+      // O traço marcava ONDE o limiar corta sem dizer QUANTO ele vale —
+      // o número só existia no resumo por voz. A trilha é `aria-hidden`,
+      // então `.result__meta` continua sendo a versão lida; aqui vai a
+      // forma curta, que cabe sob o traço mesmo com o corte perto de 0.
+    }, [el('span', {
+      class: 'result__marker-label',
+      text: `limiar ${formatPercent(item.marker.value)}`,
+    })])
     : null,
 ]);
 

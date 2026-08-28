@@ -270,7 +270,7 @@ export class DataProcessingFlow extends HTMLElement {
         tone: 'neutral',
         titulo: 'Sem avaliação no pacote',
         texto: 'Este pacote foi salvo antes de as métricas passarem a ser gravadas. '
-          + 'Rode `npm start` para treinar de novo — os números aparecem sozinhos.',
+          + 'Rode npm start para treinar de novo — os números aparecem sozinhos.',
       }));
 
       return null;
@@ -306,7 +306,10 @@ export class DataProcessingFlow extends HTMLElement {
   faixaDeLimiares() {
     const { thresholds, costs } = this.avaliacao;
 
-    return el('section', { class: 'training-bar' }, [
+    // Sem os controles de reprodução ao lado, os três cortes ficavam
+    // espremidos na metade esquerda de uma barra vazia. Aqui eles são o
+    // conteúdo inteiro — o modificador diz isso à folha de estilo.
+    return el('section', { class: 'training-bar training-bar--thresholds' }, [
       el('ol', { class: 'phase-list' }, thresholds.map((corte) => el('li', {
         class: 'phase',
         dataset: { active: String(corte.ativo) },

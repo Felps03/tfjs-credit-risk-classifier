@@ -33,6 +33,8 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
 
 > ⚠️ Finalidade **exclusivamente educacional**. O dataset real é de 1994 e serve de estudo, não de base para decisões financeiras.
 
+**Neste README:** [Documentação](#-documentação) · [Objetivo](#-objetivo) · [Início rápido](#-início-rápido) ([estrutura](#estrutura), [testes](#testes)) · [A API](#-a-api) · [Limitações conhecidas](#-limitações-conhecidas) · [Próximas evoluções](#-próximas-evoluções) · [Conceitos](#-conceitos-demonstrados) · [Aviso](#-aviso) · [Referências](#-referências)
+
 ---
 
 ## 📚 Documentação
@@ -43,7 +45,7 @@ O `README` cobre o essencial: o que o projeto é, como rodar e o que ainda falta
 | --------- | ------------ |
 | **[🧪 Dados: features, geração sintética e CSV](docs/dados-sinteticos.md)** | Como as features são definidas, como o dataset sintético é gerado (ruído, desbalanceamento, semente) e como os dados vão e voltam do CSV. |
 | **[🏦 Dataset real: German Credit](docs/german-credit.md)** | O dataset da UCI, a codificação das colunas qualitativas, a auditoria por sexo e a comparação lado a lado com o sintético. |
-| **[🧠 O modelo: arquitetura, regularização e treinamento](docs/modelo.md)** | A MLP, os dois freios contra overfitting medidos em grade, a configuração de treino e como os dados são divididos. |
+| **[🧠 O modelo: arquitetura, regularização e treinamento](docs/modelo.md)** | A MLP, a comparação de oito topologias que termina em empate, os dois freios contra overfitting medidos em grade, a configuração de treino e como os dados são divididos. |
 | **[📊 Métricas de avaliação e ajuste do limiar](docs/metricas.md)** | Matriz de confusão, precision/recall/F1, curva ROC e AUC, e a escolha do corte por custo. |
 | **[🔁 Validação cruzada e split estratificado](docs/validacao-cruzada.md)** | Por que um hold-out não basta, o que a estratificação trava e o que k dobras mudaram na conclusão do projeto. |
 | **[⚖️ Mitigação da disparidade](docs/mitigacao.md)** | O limiar por grupo: o que ele corrige, o que ele cobra e por que o padrão é desligado. |
@@ -60,12 +62,12 @@ Treinar uma rede neural capaz de estimar a probabilidade de um cliente ser de **
 
 A rede recebe as características financeiras do cliente — **57** no dataset real, **4** no sintético — e devolve **um único número entre `0` e `1`**:
 
-| Saída da rede | Interpretação          | Classificação |
-| ------------: | ---------------------- | ------------- |
+| Saída da rede | Interpretação          | Classificação no corte padrão |
+| ------------: | ---------------------- | ----------------------------- |
 |        `0.12` | 12% de chance de risco | ✅ BAIXO RISCO |
 |        `0.91` | 91% de chance de risco | ⚠️ ALTO RISCO  |
 
-O corte é feito em `0.5`:
+O corte **padrão** é `0.5`, e ele é o ponto de partida — não o que o projeto entrega:
 
 ```javascript
 const DECISION_THRESHOLD = 0.5;
@@ -74,7 +76,9 @@ const classify = (probability) =>
   (probability >= DECISION_THRESHOLD ? 'ALTO RISCO' : 'BAIXO RISCO');
 ```
 
-Esse limiar é uma **escolha de negócio**, não uma verdade do modelo — baixá-lo captura mais inadimplentes ao custo de mais falsos positivos.
+Meio a meio é o corte de quem não sabe o preço de errar. **Este projeto sabe**: no German Credit, deixar passar um inadimplente custa **5×** o que custa recusar um bom pagador, e é a matriz de custo oficial do dataset que diz isso. Com essa assimetria, o corte de menor custo cai para perto de **`0.22`** — a rede passa a sinalizar mais, troca falsos negativos caros por falsos positivos baratos, e o custo total do hold-out sai de **180 para 107**.
+
+Por isso o limiar é [medido e gravado no pacote](docs/metricas.md#-ajuste-do-limiar-de-decisão) a cada treino, viaja junto dos pesos e é devolvido em toda resposta da API. Ele é uma **escolha de negócio**, não uma verdade do modelo — e uma escolha que muda de valor quando os dados mudam é uma escolha que não pode ficar chumbada no código.
 
 ---
 
@@ -131,7 +135,7 @@ Escolher uma delas por convenção seria estranho num projeto que mede o resto, 
 npm run arquiteturas               # da regressão logística à rede de 15.745 parâmetros
 ```
 
-O [resultado](docs/modelo.md#-comparando-arquiteturas) é a parte interessante.
+O [resultado](docs/modelo.md#-comparando-arquiteturas) é a parte interessante: as oito **empatam**. Uma regressão logística de 58 parâmetros, sem camada oculta nenhuma, entrega a mesma acurácia que a rede 271× maior — porque o gargalo são as 1.000 linhas, não a capacidade.
 
 E a disparidade medida pela auditoria pode ser **corrigida** em vez de só reportada, com um limiar por grupo calibrado no treino:
 
@@ -148,13 +152,15 @@ npm run serve                      # http://localhost:3000
 npm run serve -- --port=8080
 ```
 
-O mesmo endereço abre uma **página** com dois modos sobre a mesma rede:
+O mesmo endereço abre uma **página** com três modos sobre a mesma rede:
 
-- **Análise** — o caminho do dado, dos campos que entraram até a probabilidade que saiu. Os 19 campos são **editáveis**: mudar a conta corrente de "saldo negativo" para "200 DM ou mais" repontua o cliente e move as barras na hora.
-- **Treinamento** — o laço que produziu os pesos, passo a passo, ao lado da **curva real** daquele treino: a perda de treino caindo, a de validação achatando, e o ponto onde o *early stopping* cortou.
+![A página do fluxo: passar o mouse por um campo acende o caminho dele pela rede, editar um valor repontua o cliente na hora, e os três modos mostram a mesma rede decidindo, aprendendo e sendo medida.](docs/fluxo-da-analise.gif)
+
+- **Análise** — o caminho do dado, dos campos que entraram até a probabilidade que saiu. Passar o mouse por um campo **acende o caminho dele**: uma coluna numérica vai para a escala min–max, uma qualitativa vai para o one-hot, e as duas só se encontram na primeira camada oculta. Os 19 campos são **editáveis**: baixar o prazo de 48 para 6 meses repontua o cliente e move as barras na hora.
+- **Treinamento** — o laço que produziu os pesos, passo a passo — passo à frente, erro medido, passo atrás, pesos ajustados —, ao lado da **curva real** daquele treino: a perda de treino caindo, a de validação achatando, e o ponto onde o *early stopping* cortou.
 - **Avaliação** — quanto ele acerta **ao lado do piso da classe majoritária**, a matriz de confusão no limiar escolhido, os três cortes candidatos com o preço de cada um, e a auditoria por sexo com a regra dos quatro quintos.
 
-Ela consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
+Trocar de modo **não descarta a simulação**: o cliente editado continua lá quando se volta para a análise. A página consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
 
 ```bash
 curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
@@ -167,8 +173,8 @@ curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
 ```
 
 ```json
-{ "riskProbability": 0.781903, "classification": "HIGH_RISK", "threshold": 0.109897,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T02:37:23.428Z" } }
+{ "riskProbability": 0.804617, "classification": "HIGH_RISK", "threshold": 0.225002,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" } }
 ```
 
 A parte difícil de servir um modelo não é o HTTP — é que os pesos sozinhos não bastam. [A seção sobre o serviço](docs/servico.md#-o-problema-que-a-api-expõe) mostra por quê.
@@ -228,8 +234,10 @@ tfjs-credit-risk-classifier/
 │   ├── validacao-cruzada.md
 │   ├── mitigacao.md
 │   ├── inferencia.md
+│   ├── servico.md
 │   ├── api.md
-│   └── testes.md
+│   ├── testes.md
+│   └── fluxo-da-analise.gif   # a página em funcionamento, no topo deste README
 ├── package.json
 ├── package-lock.json
 ├── .nvmrc                 # versão do Node suportada
@@ -251,9 +259,70 @@ npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
 ```
 
-São **368 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
+São **403 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
 
 > ⛔ Se o `npm install` ou o `npm start` quebrarem, o culpado quase sempre é a versão do Node: veja [Solução de problemas](docs/testes.md#-solução-de-problemas).
+
+---
+
+## 🌐 A API
+
+```http
+POST /risk-score
+Content-Type: application/json
+```
+
+As sete numéricas em unidades brutas e as doze qualitativas como índice do código na lista da UCI — 19 campos, os mesmos 19 que viram as 57 entradas da rede:
+
+```json
+{
+  "durationMonths": 48, "creditAmount": 9000, "installmentRate": 4,
+  "residenceSince": 2, "age": 24, "existingCredits": 2, "dependents": 1,
+
+  "checkingStatus": 0, "creditHistory": 1, "purpose": 0, "savingsStatus": 0,
+  "employmentYears": 1, "otherDebtors": 0, "property": 3,
+  "otherInstallments": 0, "housing": 0, "job": 1,
+  "telephone": 0, "foreignWorker": 0
+}
+```
+
+```json
+{
+  "riskProbability": 0.804617,
+  "classification": "HIGH_RISK",
+  "threshold": 0.225002,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" }
+}
+```
+
+O limiar viaja na resposta porque ele é uma escolha de negócio, não uma propriedade do modelo — e não é o `0.5` herdado, é o que a [matriz de custo escolheu](docs/metricas.md#-ajuste-do-limiar-de-decisão).
+
+```mermaid
+flowchart LR
+    A(["🖥️ Cliente HTTP"]) --> B["🌐 API node:http<br/>POST /risk-score"]
+    B --> V{"🛡️ Contrato<br/>19 campos válidos?"}
+    V -->|"não"| X(["📤 400<br/>lista de erros"])
+    V -->|"sim"| C["⚙️ Pré-processamento<br/>scaler do metadata.json"]
+    C --> D["🧠 Modelo carregado<br/>tf.loadLayersModel"]
+    D --> E["📈 Probabilidade<br/>0.804617"]
+    E --> F(["📤 200<br/>HIGH_RISK"])
+
+    classDef edge fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
+    classDef step fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#1e293b
+    classDef key  fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
+    classDef bad  fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+
+    class A,F edge
+    class B,D,E step
+    class C,V key
+    class X bad
+```
+
+O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização** do treino. Divergência entre treino e inferência (*training-serving skew*) é uma das falhas mais comuns em ML em produção, e a pior característica dela é não dar erro — a rede recebe números que não significam o que os pesos aprenderam, devolve uma probabilidade plausível, e o serviço responde `200 OK`.
+
+Por isso o `npm start` não salva mais só os pesos. Ele salva um **pacote**: `model.json`, `weights.bin` e um `metadata.json` com o `scaler` medido naquele treino, a ordem exata das 57 features e o limiar escolhido. Na subida, o serviço **recusa** o pacote se a rede esperar outro número de entradas ou se a lista de features gravada não bater com a que o código gera hoje — o caso em que o tamanho do vetor continua certo e o significado de cada posição, não.
+
+E a validação do payload, que o CSV nunca precisou ter, aqui é obrigatória: um `age` ausente viraria `NaN`, e `NaN >= limiar` é `false` — o cliente sairia classificado como baixo risco por não ter mandado a idade. [Os detalhes estão na documentação do serviço](docs/servico.md#-por-que-validar-se-o-csv-nunca-foi-validado), inclusive por que `personalStatus` é recusado em vez de ignorado, e por que a API serve só a política de limiar único.
 
 ---
 
@@ -321,65 +390,6 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~frontend para simular clientes~~ — feito, veja [A página do fluxo](docs/servico.md#-a-página-do-fluxo);
 - [ ] inferência no navegador com TensorFlow.js;
 - [ ] autenticação e log estruturado das decisões servidas.
-
-### 🌐 A API
-
-```http
-POST /risk-score
-Content-Type: application/json
-```
-
-As sete numéricas em unidades brutas e as doze qualitativas como índice do código na lista da UCI — 19 campos, os mesmos 19 que viram as 57 entradas da rede:
-
-```json
-{
-  "durationMonths": 48, "creditAmount": 9000, "installmentRate": 4,
-  "residenceSince": 2, "age": 24, "existingCredits": 2, "dependents": 1,
-
-  "checkingStatus": 0, "creditHistory": 1, "purpose": 0, "savingsStatus": 0,
-  "employmentYears": 1, "otherDebtors": 0, "property": 3,
-  "otherInstallments": 0, "housing": 0, "job": 1,
-  "telephone": 0, "foreignWorker": 0
-}
-```
-
-```json
-{
-  "riskProbability": 0.781903,
-  "classification": "HIGH_RISK",
-  "threshold": 0.109897,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T02:37:23.428Z" }
-}
-```
-
-O limiar viaja na resposta porque ele é uma escolha de negócio, não uma propriedade do modelo — e não é o `0.5` herdado, é o que a [matriz de custo escolheu](docs/metricas.md#-ajuste-do-limiar-de-decisão).
-
-```mermaid
-flowchart LR
-    A(["🖥️ Cliente HTTP"]) --> B["🌐 API node:http<br/>POST /risk-score"]
-    B --> V{"🛡️ Contrato<br/>19 campos válidos?"}
-    V -->|"não"| X(["📤 400<br/>lista de erros"])
-    V -->|"sim"| C["⚙️ Pré-processamento<br/>scaler do metadata.json"]
-    C --> D["🧠 Modelo carregado<br/>tf.loadLayersModel"]
-    D --> E["📈 Probabilidade<br/>0.781903"]
-    E --> F(["📤 200<br/>HIGH_RISK"])
-
-    classDef edge fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
-    classDef step fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#1e293b
-    classDef key  fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
-    classDef bad  fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
-
-    class A,F edge
-    class B,D,E step
-    class C,V key
-    class X bad
-```
-
-O ponto crítico: o serviço precisa aplicar **exatamente a mesma normalização** do treino. Divergência entre treino e inferência (*training-serving skew*) é uma das falhas mais comuns em ML em produção, e a pior característica dela é não dar erro — a rede recebe números que não significam o que os pesos aprenderam, devolve uma probabilidade plausível, e o serviço responde `200 OK`.
-
-Por isso o `npm start` não salva mais só os pesos. Ele salva um **pacote**: `model.json`, `weights.bin` e um `metadata.json` com o `scaler` medido naquele treino, a ordem exata das 57 features e o limiar escolhido. Na subida, o serviço **recusa** o pacote se a rede esperar outro número de entradas ou se a lista de features gravada não bater com a que o código gera hoje — o caso em que o tamanho do vetor continua certo e o significado de cada posição, não.
-
-E a validação do payload, que o CSV nunca precisou ter, aqui é obrigatória: um `age` ausente viraria `NaN`, e `NaN >= limiar` é `false` — o cliente sairia classificado como baixo risco por não ter mandado a idade. [Os detalhes estão na documentação do serviço](docs/servico.md#-por-que-validar-se-o-csv-nunca-foi-validado), inclusive por que `personalStatus` é recusado em vez de ignorado, e por que a API serve só a política de limiar único.
 
 ---
 

@@ -41,12 +41,21 @@ const node = (layer, item) => el('li', {
 // rótulo dela vive no `aria-label` e no balão de hover, e não na tela.
 const nomeada = (layerId) => layerId === 'preparo' || layerId === 'saida';
 
+// Título e legenda viajam JUNTOS com os círculos, num bloco só. Soltos,
+// eles ficavam presos no topo de uma coluna de 520px enquanto os nós se
+// centravam no meio dela — 188px de vazio entre a legenda "16 unidades ·
+// 4 representadas" e os círculos que ela descreve, e o olho tendo que
+// adivinhar qual legenda pertence a qual coluna. A altura mínima do
+// bloco é o que mantém os quatro títulos na mesma linha apesar de as
+// camadas terem 1, 2, 3 e 4 nós.
 const layerBlock = (layer, coluna) => el('li', {
   class: 'network__layer',
   attrs: { style: `--coluna: ${coluna}` },
 }, [
-  el('h3', { class: 'network__layer-title', text: layer.title }),
-  el('p', { class: 'network__layer-caption', text: layer.caption }),
+  el('div', { class: 'network__layer-head' }, [
+    el('h3', { class: 'network__layer-title', text: layer.title }),
+    el('p', { class: 'network__layer-caption', text: layer.caption }),
+  ]),
   el('ul', { class: 'network__nodes' }, layer.nodes.map((item, posicao) =>
     node(layer, {
       ...item,

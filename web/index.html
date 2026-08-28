@@ -41,11 +41,15 @@
              a decidir. `radiogroup` porque é uma escolha entre opções
              mutuamente exclusivas, e não dois botões que fazem coisas. -->
         <div class="segmented" role="radiogroup" aria-label="Modo de visualização">
-          <button class="segmented__option" type="button" role="radio"
+          <!-- `tabindex` móvel: só a opção marcada é parada de tabulação,
+               e as setas percorrem as três. É o que `role="radio"` promete
+               a quem navega por teclado — sem isto o papel ARIA anunciava
+               um grupo de rádio que não se comportava como um. -->
+          <button class="segmented__option" type="button" role="radio" tabindex="0"
                   aria-checked="true" data-mode="analise">Análise</button>
-          <button class="segmented__option" type="button" role="radio"
+          <button class="segmented__option" type="button" role="radio" tabindex="-1"
                   aria-checked="false" data-mode="treinamento">Treinamento</button>
-          <button class="segmented__option" type="button" role="radio"
+          <button class="segmented__option" type="button" role="radio" tabindex="-1"
                   aria-checked="false" data-mode="avaliacao">Avaliação</button>
         </div>
 

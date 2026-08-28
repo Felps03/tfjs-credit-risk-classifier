@@ -26,10 +26,12 @@ export class FlowTrainingFacts extends HTMLElement {
     this.append(el('section', { class: 'panel', attrs: { 'aria-labelledby': 'titulo-treino' } }, [
       el('header', { class: 'panel__header' }, [
         el('h2', { class: 'panel__title', text: 'Como foi treinado', id: 'titulo-treino' }),
-        el('p', {
-          class: 'panel__subtitle',
-          text: 'os números gravados no pacote por `npm start`',
-        }),
+        // O comando vai num `<code>`, não entre crases: crase em texto
+        // de interface aparece como crase na tela.
+        el('p', { class: 'panel__subtitle' }, [
+          document.createTextNode('os números gravados no pacote por '),
+          el('code', { text: 'npm start' }),
+        ]),
       ]),
       el('ul', { class: 'fact-list' }, (this.facts ?? []).map(fato)),
       el('span', {

@@ -94,7 +94,7 @@ const buildModel = (inputSize = 4, options = {}) => {
 | ------------- | ----------------------------------------------------------------------------------------- |
 | **ReLU**      | Introduz não-linearidade barata e evita o desaparecimento de gradiente das camadas ocultas |
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
-| **16 → 8**    | Funil, e a menor topologia que [empata com todas as outras](#-comparando-arquiteturas) em uma comparação de oito |
+| **16 → 8**    | Funil, e a topologia de **menor custo médio** numa [comparação de oito](#-comparando-arquiteturas) em que nenhuma se distingue das outras em acurácia |
 | **L2 + dropout** | Os dois freios contra decorar, [medidos em uma grade de 30 combinações](#-regularização-l2-e-dropout) |
 
 ```javascript
@@ -102,6 +102,86 @@ const model = buildModel(source.featureNames.length, { units, l2, dropout });   
 ```
 
 O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução. E a topologia é escolhível pela linha de comando — `node index.js --units=64,32` —, o que existe para que a próxima pergunta possa ser respondida com medida em vez de convenção.
+
+---
+
+## 🔬 Comparando arquiteturas
+
+"Qual arquitetura usar?" é a pergunta que mais se responde por **hábito** em projetos de rede neural: duas camadas ocultas, umas dezenas de unidades, afunilando. Num projeto que mede a normalização, o limiar e a dose de regularização, responder essa por costume seria a única exceção — então ela também é medida, com a mesma validação cruzada que mede o resto.
+
+```bash
+npm run arquiteturas                        # 8 topologias × 5 dobras = 40 treinos
+node index.js --arquiteturas --repeticoes=3 # o triplo de medidas, com sementes diferentes
+npm run arquiteturas:synthetic              # a mesma comparação no dataset sintético
+```
+
+A lista começa **deliberadamente no piso**. Uma regressão logística (`--units=0`) não é rede neural nenhuma: é uma soma ponderada das 57 features passando por uma sigmoide, 58 parâmetros ao todo. Se as camadas ocultas não baterem essa linha reta, elas não estão pagando o próprio custo — e "não estão" é uma resposta possível.
+
+```text
+Arquitetura         | Parâmetros | Épocas |        Acurácia |             AUC |       Custo
+--------------------+------------+--------+-----------------+-----------------+------------
+regressão logística |         58 |   40.0 | 0.7330 ± 0.0153 | 0.7692 ± 0.0158 | 100.2 ± 3.7
+4                   |        237 |   39.0 | 0.7320 ± 0.0187 | 0.7697 ± 0.0235 |  98.2 ± 5.9
+16                  |        945 |   28.4 | 0.7510 ± 0.0148 | 0.7779 ± 0.0193 | 100.2 ± 4.5
+16 → 8 (padrão)     |       1073 |   28.4 | 0.7480 ± 0.0123 | 0.7812 ± 0.0154 |  94.4 ± 3.4
+32 → 16             |       2401 |   21.4 | 0.7490 ± 0.0154 | 0.7802 ± 0.0178 |  97.6 ± 3.9
+64 → 32             |       5825 |   19.4 | 0.7610 ± 0.0148 | 0.7760 ± 0.0189 | 101.6 ± 5.9
+128 → 64            |      15745 |   12.0 | 0.7450 ± 0.0135 | 0.7797 ± 0.0184 |  98.8 ± 4.5
+16 → 16 → 16        |       1489 |   22.8 | 0.7510 ± 0.0113 | 0.7776 ± 0.0177 |  96.8 ± 5.7
+
+Baseline da classe majoritária: 0.7000
+Protocolo: 5 dobras × 1 repetição(ões) = 5 medidas por arquitetura.
+```
+
+### O resultado é um empate
+
+A regra para ler a tabela está impressa embaixo dela: **duas arquiteturas só se distinguem se a distância entre elas superar a soma dos erros padrão.** Aplicada aqui, ela não separa nada.
+
+O extremo mais favorável a "rede maior é melhor" é comparar a pior acurácia com a melhor:
+
+| | Acurácia | Erro padrão |
+| --- | ---: | ---: |
+| `4` (a pior) | 0.7320 | ± 0.0187 |
+| `64 → 32` (a melhor) | 0.7610 | ± 0.0148 |
+| **distância** | **0.0290** | **soma: 0.0335** |
+
+A distância não cobre nem a soma dos erros. Se o par mais distante da tabela não se distingue, **nenhum par se distingue** — em acurácia, em AUC e em custo, as oito são a mesma medida vista oito vezes.
+
+E aí está o número que vale o comando inteiro: **58 parâmetros empatam com 15.745.** Uma regressão logística sem camada oculta nenhuma entrega a mesma acurácia que uma rede com 271× mais parâmetros. As camadas ocultas deste projeto não estão pagando o próprio custo, e a razão é a mesma que aparece em todo o resto da documentação: **o gargalo são as 1.000 linhas, não a capacidade.**
+
+### O que muda de verdade é quando o treino para
+
+A única coluna que se move de forma sistemática é a das épocas:
+
+```text
+regressão logística   40.0 épocas   ← nunca acionou o early stopping
+16 → 8                28.4
+32 → 16               21.4
+64 → 32               19.4
+128 → 64              12.0          ← para em menos de um terço do tempo
+```
+
+Quanto mais capacidade, **mais cedo o early stopping corta** — porque mais capacidade decora mais rápido, a `val_loss` vira mais cedo, e a paciência de 5 épocas se esgota antes. A rede de 15.745 parâmetros não é interrompida por ser boa; é interrompida por começar a decorar na época 7.
+
+O outro extremo diz o contrário e é honesto registrar: a regressão logística rodou as **40 épocas inteiras** sem nunca acionar a parada. Ela não convergiu — ela ficou sem orçamento. O empate dela com as outras é um empate com o treino truncado; dar-lhe mais épocas é um experimento que este comando ainda não faz.
+
+### Então por que o padrão continua sendo 16 → 8
+
+Empate em acurácia não é empate em tudo. `16 → 8` tem o **menor custo médio** da tabela (94.4 ± 3.4) e o menor erro padrão junto — e custo, não acurácia, é a métrica que este projeto otimiza, porque é ela que carrega o `FN = 5 × FP` da [matriz oficial do dataset](metricas.md#-ajuste-do-limiar-de-decisão).
+
+Mesmo isso é frágil: 94.4 ± 3.4 contra 101.6 ± 5.9 do `64 → 32` é uma distância de 7.2 contra uma soma de erros de 9.3. **Também não se distingue.** O que a tabela autoriza a dizer é mais modesto do que "16 → 8 é a melhor":
+
+> Entre oito topologias indistinguíveis, a escolhida é uma das menores, tem o melhor ponto estimado de custo e a menor dispersão. Na ausência de diferença medida, **o critério que sobra é o custo de manutenção** — e 1.073 parâmetros são mais baratos de treinar, servir e explicar que 15.745.
+
+### Os limites desta medição
+
+Três, e nenhum é detalhe:
+
+- **5 medidas por arquitetura** é pouco. `--repeticoes=3` triplica para 15, com sementes de embaralhamento diferentes a cada repetição — repetir com a mesma semente mediria só a variação dos pesos iniciais, que já se sabe ser pequena perto da variação do sorteio.
+- **A dose de regularização é a mesma para todas.** `L2 0.003` e `dropout 0.2` foram [escolhidos na grade](#-regularização-l2-e-dropout) *para a topologia padrão*. Uma rede de 15.745 parâmetros provavelmente pede uma dose maior, e comparar capacidades com um freio calibrado para uma delas favorece essa uma.
+- **Escolher e medir no mesmo protocolo.** É a mesma limitação que o README já registra para o limiar e para a grade de regularização: o certo seria escolher a topologia num conjunto e reportá-la em outro. Aqui a comparação e a conclusão saem das mesmas 5 dobras.
+
+Nenhum dos três muda a leitura principal — um empate tão largo não vira diferença com mais dobras —, mas os três mudam o que se pode afirmar sobre **qual** topologia é a melhor. A resposta medida é: por enquanto, nenhuma.
 
 ---
 

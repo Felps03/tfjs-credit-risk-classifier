@@ -26,6 +26,12 @@ import { anchorId } from '../mappers.js';
 // desenhar do que entrar em laço.
 const SALTOS = 2;
 
+// A rede se desenha uma vez por carga da página, e não uma vez por
+// instância. Trocar de modo destrói esta camada e cria outra: com a
+// trava dentro do objeto, o traçado de 1,4s recomeçava a cada troca — e
+// uma animação que orienta na primeira vez atrasa na terceira.
+let jaDesenhou = false;
+
 const centro = (rect, hostRect) => ({
   x: rect.left - hostRect.left + rect.width / 2,
   y: rect.top - hostRect.top + rect.height / 2,
@@ -246,8 +252,8 @@ export class FlowConnections extends HTMLElement {
 
     // O traçado de entrada roda UMA vez. Sem esta trava, cada resize
     // redesenharia a rede do zero na frente de quem só arrastou a janela.
-    if (anima && !this.jaEntrou) {
-      this.jaEntrou = true;
+    if (anima && !jaDesenhou) {
+      jaDesenhou = true;
       this.canvas.classList.add('is-entering');
 
       // A classe precisa SAIR quando a animação termina. Ela fica no

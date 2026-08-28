@@ -50,9 +50,9 @@ export const toInputs = (customer, request, observedRange = {}) => {
       };
 
       if (group !== 'categorical') {
-        const { step, suffix } = describeControl(field);
+        const { step, suffix, min, max } = describeControl(field);
 
-        return { ...base, step, suffix, observed: observedRange[field] ?? null };
+        return { ...base, step, suffix, min, max, observed: observedRange[field] ?? null };
       }
 
       return {

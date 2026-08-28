@@ -25,6 +25,16 @@ body {
 }
 
 h1, h2, h3, p, ul, ol, figure { margin: 0; }
+
+/* Um comando escrito entre crases num texto de interface aparece na tela
+   COM as crases. Quando é comando, é `<code>`. */
+code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
 ul, ol { padding: 0; list-style: none; }
 
 /* O `display: none` do atributo `hidden` vem da folha do NAVEGADOR, que
@@ -237,14 +247,19 @@ ul, ol { padding: 0; list-style: none; }
   overflow: hidden;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-lg);
-  background: var(--color-hairline);
+  background: var(--color-surface);
 }
 
-/* Os cartões encostam e o `gap` de 1px sobre o fundo da grade vira a
-   linha divisória — sem borda em cada um, que somaria duas. */
+/* Os cartões encostam e o `gap` de 1px vira a linha divisória — sem
+   borda em cada um, que somaria duas. A linha vem de um anel de 1px em
+   cada cartão, e NÃO do fundo da grade aparecendo pelo vão: com quatro
+   números em três colunas sobra uma célula vazia, e o fundo cinza dela
+   virava um bloco chapado do tamanho de dois cartões. Com o anel, a
+   sobra é superfície — parte do mesmo cartão, e não um buraco. */
 .stat {
   padding: var(--space-4) var(--space-5);
   background: var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-hairline);
   animation: sobe 620ms var(--ease-out) both;
   animation-delay: calc(var(--ordem, 0) * 70ms);
 }
@@ -543,16 +558,22 @@ flow-connections {
   text-align: right;
 }
 
-/* Largura FIXA, não um teto. Um `<select>` se dimensiona pela opção mais
-   longa, então "sim/não" ficava com metade da largura de "gestão /
-   autônomo qualificado" — doze controles terminando em doze lugares
-   diferentes. O texto que não cabe continua inteiro na lista aberta. */
-.field--select { width: 112px; }
+/* O select ocupa a LINHA, e o rótulo fica acima dele. A largura fixa de
+   112px era o preço do alinhamento das doze pontas, e o preço era alto
+   demais: 24 das 50 opções do contrato não cabiam, "menos de 100 DM"
+   aparecia como "menos de 100" (outra faixa) e "não qualificada,
+   residente" ficava idêntica a "não qualificada, não residente" — o
+   valor que se lê deixava de ser o valor que está selecionado.
+   Ocupando a linha, cabe até a opção mais longa do dataset, "crítico /
+   crédito em outro banco", e as pontas continuam terminando no mesmo x
+   porque o controle continua encostado na borda direita do card. */
+.field--select { width: 100%; min-width: 0; }
 
-/* A coluna da unidade existe em TODAS as linhas, mesmo vazia, para os
-   dezenove controles terminarem no mesmo x. Ela é estreita de propósito:
-   cada pixel aqui sai do rótulo, e é o rótulo que quebra em duas linhas
-   quando falta espaço. */
+/* A coluna da unidade existe em todas as linhas NUMÉRICAS, mesmo vazia,
+   para os sete controles terminarem no mesmo x. Ela é estreita de
+   propósito: cada pixel aqui sai do rótulo, e é o rótulo que quebra em
+   duas linhas quando falta espaço. As qualitativas não a recebem — não
+   há unidade para escrever, e a linha inteira é do select. */
 .field__suffix {
   flex: none;
   width: 29px;
@@ -624,6 +645,18 @@ flow-connections {
 
 .input-list--form .input-item { flex-wrap: wrap; row-gap: 0; }
 
+/* Duas formas de linha na mesma lista, porque são duas coisas: uma
+   numérica é um par rótulo/valor e cabe ao lado do nome; uma qualitativa
+   é uma ESCOLHA, e o que ela precisa é do texto inteiro à vista. O recuo
+   do controle é o ícone mais o gap, e é ele que mantém o select alinhado
+   com o rótulo que está logo acima. */
+.input-list--form .input-item[data-group="categorical"] { row-gap: var(--space-1); }
+
+.input-item[data-group="categorical"] .input-item__control {
+  flex: 1 0 100%;
+  margin-left: calc(22px + var(--space-2));
+}
+
 .panel__note {
   display: flex;
   gap: var(--space-2);
@@ -683,7 +716,33 @@ flow-connections {
   flex-direction: column;
   gap: var(--space-2);
   align-items: center;
+
+  /* O bloco inteiro — cabeçalho e nós — é centrado na coluna. Antes o
+     cabeçalho ficava no topo e só os nós se centravam, e era daí que
+     vinha o vão entre a legenda e o que ela legenda. */
+  justify-content: center;
   min-width: 0;
+}
+
+/* Título e legenda descem junto com os círculos. Presos no topo de uma
+   coluna de 520px enquanto os nós se centravam no meio dela, sobravam
+   188px entre "16 unidades · 4 representadas" e os círculos que a frase
+   descreve — e a legenda passava a depender de o olho acertar a coluna.
+   A altura mínima é o que mantém os quatro títulos na mesma linha apesar
+   de as camadas terem 1, 2, 3 e 4 nós e de as legendas quebrarem em
+   número diferente de linhas. */
+.network__layer-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+
+  /* Alinhado pelo TOPO: a legenda de "Camada oculta 1" quebra em duas
+     linhas e a de "Saída" em uma, e é o título que se lê varrendo as
+     quatro colunas — são eles que precisam estar na mesma linha. */
+  justify-content: flex-start;
+  min-height: 4.2em;
+  width: 100%;
 }
 
 /* O fundo é o mesmo da página, e existe só para abrir espaço: no layout
@@ -722,7 +781,12 @@ flow-connections {
    que é o que faz "camada" parecer uma camada. */
 .network__nodes {
   display: flex;
-  flex: 1;
+
+  /* Altura fixa em vez de `flex: 1`: é ela que torna as quatro colunas
+     estruturalmente idênticas — mesma caixa de nós em todas —, e é isso
+     que mantém os títulos alinhados sem prender nenhum deles ao topo. */
+  flex: none;
+  min-height: 190px;
   flex-direction: column;
   gap: var(--space-6);
   align-items: center;
@@ -849,17 +913,27 @@ flow-network.is-tracing .node-slot:not(.is-traced) .node__caption { opacity: 0.3
    o ângulo das dezenove ligações suave: com os nós espremidos em 380px ao
    lado de um card de 780px, o feixe saía quase na vertical e virava um
    emaranhado no canto inferior. */
+/* 520px era a altura necessária quando o cabeçalho ficava colado no topo
+   e só os nós se centravam: o vão interno fazia parte da conta. Agora que
+   cabeçalho e nós são um bloco só, a mesma altura vira sobra em volta
+   dele — e o feixe de dezenove ligações continua com o mesmo ângulo,
+   porque quem o define é a altura do card de entradas, não esta. */
 @media (min-width: 1024px) {
-  .network { min-height: 520px; }
+  .network { min-height: 430px; }
 }
 
 @media (max-width: 1023px) {
   .network { flex-direction: column; gap: var(--space-6); min-height: 0; }
 
+  /* Deitada, a coluna de nós não precisa de altura nenhuma: quem separa
+     as camadas aqui é o empilhamento, não o vão dentro de cada uma. */
+  .network__layer-head { min-height: 0; }
+
   .network__nodes {
     flex-direction: row;
     gap: var(--space-4);
     justify-content: center;
+    min-height: 0;
     padding: var(--space-2) 0;
   }
 
@@ -1163,6 +1237,13 @@ flow-network.is-tracing .node-slot:not(.is-traced) .node__caption { opacity: 0.3
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* Na avaliação não há controles de reprodução ao lado: os três cortes
+   são o conteúdo inteiro da barra, e ficavam apertados na metade
+   esquerda dela enquanto a outra metade não tinha nada. */
+.training-bar--thresholds .phase-list { flex: 1; }
+.training-bar--thresholds .phase { flex: 1 1 200px; }
+.training-bar--thresholds .phase__detail { max-width: none; }
 
 /* Os quatro passos ficam SEMPRE visíveis, e não só o atual: é a
    sequência que ensina, não o instante. O destaque diz onde o laço

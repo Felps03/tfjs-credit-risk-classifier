@@ -34,6 +34,10 @@ const numero = (input, aoMudar) => {
     step: String(input.step ?? 1),
     inputMode: 'numeric',
     attrs: {
+      // Só os campos que carregam `min`/`max` no dicionário ganham a
+      // trava — e são os dois que são faixa ordenada, não medida.
+      ...(input.min === undefined ? {} : { min: String(input.min) }),
+      ...(input.max === undefined ? {} : { max: String(input.max) }),
       'aria-describedby': input.observed ? `faixa-${input.id}` : '',
 
       // Sem isto o Chrome RESTAURA o valor digitado antes do reload,
@@ -149,6 +153,7 @@ export class FlowInputPanel extends HTMLElement {
       class: 'input-item',
       dataset: {
         field: input.id,
+        group: input.group,
         invalid: 'false',
         foraDaFaixa: String(foraDaFaixa(input.value, input.observed)),
       },
@@ -170,11 +175,18 @@ export class FlowInputPanel extends HTMLElement {
       el('span', { class: 'input-item__control' }, [
         controle,
 
-        // A coluna da unidade existe mesmo vazia. Sem ela, "Créditos
-        // neste banco" e "Dependentes" — os dois campos sem unidade —
-        // encostavam na borda enquanto os outros paravam 38px antes, e
-        // dezenove controles desalinhados leem como dezenove erros.
-        el('span', { class: 'field__suffix', text: input.suffix ?? '' }),
+        // A coluna da unidade existe mesmo vazia nas NUMÉRICAS. Sem ela,
+        // "Créditos neste banco" e "Dependentes" — os dois campos sem
+        // unidade — encostavam na borda enquanto os outros paravam 38px
+        // antes, e dezenove controles desalinhados leem como dezenove
+        // erros.
+        //
+        // Nas qualitativas ela não existe: não há unidade nenhuma para
+        // escrever, e os 33px que ela custaria saem justamente do único
+        // controle desta tela cujo texto precisa caber por inteiro.
+        input.group === 'categorical'
+          ? null
+          : el('span', { class: 'field__suffix', text: input.suffix ?? '' }),
       ]),
 
       // Duas mensagens, ambas ligadas ao campo por `aria-describedby` ou
@@ -208,6 +220,12 @@ export class FlowInputPanel extends HTMLElement {
 
     linha.addEventListener('pointerenter', () => rastrear(input.id));
     linha.addEventListener('pointerleave', () => rastrear(null));
+
+    // No toque o `pointerleave` pode nunca chegar: o dedo sai da TELA, e
+    // não do elemento. Sem isto o rastro fica preso no último campo
+    // tocado, e a rede segue apagada em volta de um caminho que ninguém
+    // está mais consultando.
+    linha.addEventListener('pointercancel', () => rastrear(null));
     linha.addEventListener('focusin', () => rastrear(input.id));
     linha.addEventListener('focusout', () => rastrear(null));
 

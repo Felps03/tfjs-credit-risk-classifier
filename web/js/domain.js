@@ -195,11 +195,20 @@ export const formatValue = (field, value) => {
 // `suffix` é a unidade que fica ao lado do campo. Ela não entra no
 // payload: o serviço recebe o número cru, e a unidade é só o que impede
 // alguém de digitar 48 achando que são anos.
+//
+// `min`/`max` aparecem SÓ onde o número não é uma medida: `installmentRate`
+// e `residenceSince` são faixas ordenadas de 1 a 4 na definição do German
+// Credit, e a própria tela já escreve "faixa 3 de 4". Digitar 9 ali não é
+// extrapolar — é um código que não existe. Nos demais campos o limite
+// continua ausente de propósito: idade 90 ou 30.000 DM estão fora do que a
+// rede viu, e a tela responde a isso com o aviso de faixa, não com uma
+// trava — ver uma extrapolação acontecer é metade do que este formulário
+// existe para mostrar.
 const NUMERIC_CONTROL = {
   durationMonths: { step: 1, suffix: 'meses' },
   creditAmount: { step: 50, suffix: 'DM' },
-  installmentRate: { step: 1, suffix: 'de 4' },
-  residenceSince: { step: 1, suffix: 'de 4' },
+  installmentRate: { step: 1, suffix: 'de 4', min: 1, max: 4 },
+  residenceSince: { step: 1, suffix: 'de 4', min: 1, max: 4 },
   age: { step: 1, suffix: 'anos' },
   existingCredits: { step: 1, suffix: '' },
   dependents: { step: 1, suffix: '' },

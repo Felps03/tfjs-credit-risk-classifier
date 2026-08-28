@@ -70,7 +70,7 @@ model/
 ```json
 {
   "version": 1,
-  "savedAt": "2026-08-28T02:37:23.428Z",
+  "savedAt": "2026-08-28T04:07:00.306Z",
   "source": "german",
   "encoding": "onehot",
   "featureNames": ["durationMonths", "creditAmount", "…", "foreignWorker=A202"],
@@ -79,7 +79,7 @@ model/
     "min":   { "durationMonths": 4,  "creditAmount": 250,   "age": 19 },
     "range": { "durationMonths": 68, "creditAmount": 18174, "age": 56 }
   },
-  "threshold": 0.109897,
+  "threshold": 0.225002,
   "thresholdStrategy": "menor custo (FP=1, FN=5)",
   "training": { "customers": 800, "units": [16, 8], "l2": 0.003, "dropout": 0.2 }
 }
@@ -146,14 +146,14 @@ As sete numéricas em unidades **brutas** e as doze qualitativas como **índice 
 
 ```json
 {
-  "riskProbability": 0.781903,
+  "riskProbability": 0.804617,
   "classification": "HIGH_RISK",
-  "threshold": 0.109897,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T02:37:23.428Z" }
+  "threshold": 0.225002,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" }
 }
 ```
 
-O limiar viaja na resposta porque ele é uma **escolha de negócio**, não uma propriedade do modelo: sem ele, `0.78` não diz se o cliente foi aprovado. E ele não é o `0.5` herdado — é o `0.109897` que a matriz de custo escolheu, gravado no pacote.
+O limiar viaja na resposta porque ele é uma **escolha de negócio**, não uma propriedade do modelo: sem ele, `0.80` não diz se o cliente foi aprovado. E ele não é o `0.5` herdado — é o `0.225002` que a matriz de custo escolheu, gravado no pacote.
 
 > A probabilidade e o limiar são arredondados na **mesma** casa (6). Arredondar só um dos dois produziria, na fronteira, um JSON que se contradiz: `riskProbability` igual ao `threshold` e classificação `LOW_RISK`.
 
@@ -164,7 +164,7 @@ Descobrir o contrato batendo no `400` é um jeito ruim de integrar, então o ser
 ```json
 {
   "source": "german",
-  "threshold": 0.109897,
+  "threshold": 0.225002,
   "request": {
     "numeric": ["durationMonths", "creditAmount", "installmentRate", "…"],
     "categorical": {
@@ -246,15 +246,17 @@ Dois detalhes que só aparecem quando se escreve o servidor à mão:
 
 `http://localhost:3000/` não devolve JSON: devolve uma página com três modos sobre o mesmo pacote — **Análise**, o caminho que o dado percorre até virar uma probabilidade; **Treinamento**, como a rede aprendeu a percorrê-lo; e **Avaliação**, quanto ela acerta e quem ela penaliza.
 
+![Os três modos da página: o rastro de um campo pela rede, a repontuação ao vivo ao editar um valor, o laço do treino sobre a curva medida e a avaliação com a auditoria por sexo.](fluxo-da-analise.gif)
+
 ```text
 DADOS UTILIZADOS          PROCESSAMENTO                    RESULTADOS DA ANÁLISE
 
-Prazo do contrato  ──┐   Preparo   oculta 1   oculta 2       Risco de inadimplência  78,2%
+Prazo do contrato  ──┐   Preparo   oculta 1   oculta 2       Risco de inadimplência  80,5%
 Valor do crédito   ──┤                                       ████████████████████░░░░░
-Idade              ──┼──▶  ○ ──────  ○ ────────  ○ ──┐              ┆ limiar 11,0%
+Idade              ──┼──▶  ○ ──────  ○ ────────  ○ ──┐          ┆ limiar 22,5%
 Conta corrente     ──┤   min–max     ○           ○   ├──▶ ○ ──▶
 Finalidade         ──┤                ○          ○   │  sigmoide   Probabilidade de adimplência
-Moradia            ──┴──▶  ○ ──────   ○ ─────────────┘                                21,8%
+Moradia            ──┴──▶  ○ ──────   ○ ─────────────┘                                19,5%
                          one-hot                             █████░░░░░░░░░░░░░░░░░░░░
 ```
 
@@ -264,11 +266,32 @@ Uma camada de 16 unidades vira 4 círculos, e a legenda diz exatamente isso (`16
 
 **São dois resultados, não três.** O modelo tem uma saída — uma probabilidade —, e a segunda barra é o complemento dela. Uma terceira faixa apresentaria uma decisão de layout como se fosse uma decisão do modelo.
 
+### Passar o mouse: para onde vai cada campo
+
+Antes de editar qualquer coisa, a página responde a uma pergunta mais básica: **para onde vai a idade?**
+
+Passar o mouse (ou o foco do teclado) por uma linha acende o caminho daquele campo e apaga o resto. E o caminho é o real, não um enfeite que ilumina tudo por igual:
+
+| Campo | Acende até |
+| ----- | ---------- |
+| `age`, `creditAmount`, `durationMonths`… | a **escala min–max** — são as sete numéricas |
+| `checkingStatus`, `purpose`, `housing`… | o **one-hot** — são as doze qualitativas |
+
+É a mesma regra que decidiu quais ligações desenhar, e ela vive num lugar só: uma numérica nunca acende o one-hot, porque uma numérica nunca passa por ele. A tela e o pipeline não podem discordar porque leem a mesma tabela.
+
 ### Simular um cliente
 
 Os 19 campos são **editáveis**, e cada alteração repontua. Mudar a conta corrente de "saldo negativo" para "200 DM ou mais" derruba o risco na hora — é a variável mais forte do German Credit, e vê-la mexer explica mais do que qualquer tabela de pesos.
 
+O número não troca de golpe: ele **rola** até o valor novo. Não é enfeite. Repontuando a cada tecla, um texto que pisca de 80,5% para 75,1% não deixa ver que *direção* a mudança tomou — e a direção é a informação. Rolando, dá para ver qual campo subiu o risco.
+
 **Nenhum campo é escrito à mão na página.** O tipo de cada controle sai do contrato: as sete numéricas viram `<input type="number">`, as doze qualitativas viram `<select>` cujas opções são os códigos do `GET /schema` traduzidos pelo dicionário de domínio. Um retreino que mude as colunas muda o formulário sozinho.
+
+**O `<select>` ocupa a linha inteira, com o rótulo acima.** Ele já foi um controle estreito ao lado do nome do campo, alinhado com as sete numéricas — e o alinhamento custou caro: **24 das 50 opções** do contrato não cabiam. "menos de 100 DM" aparecia como "menos de 100", que é outra faixa; "não qualificada, residente" ficava idêntica a "não qualificada, não residente", que é outra categoria. Um valor que não se lê inteiro não é um valor mais curto — é o valor errado. Uma numérica é um par rótulo/valor e cabe numa linha; uma qualitativa é uma **escolha**, e o que ela precisa é do texto inteiro à vista.
+
+**Só dois campos numéricos têm `min` e `max`.** `installmentRate` e `residenceSince` são faixas ordenadas de 1 a 4 na definição do dataset — a tela escreve "faixa 3 de 4" —, então digitar 9 ali não é extrapolar: é um código que não existe. Nos outros cinco o limite está **ausente de propósito**. Idade 90 ou 30.000 DM estão fora do que a rede viu, e a resposta certa é o aviso de faixa da seção seguinte, não uma trava: ver a extrapolação acontecer é metade do que este formulário existe para mostrar.
+
+**Editar não é perder o exemplo.** Assim que qualquer campo muda, aparece um "Restaurar exemplo" no cabeçalho do card, que devolve o cliente publicado em `GET /schema`. E o "Reprocessar" do topo recarrega o pacote **sem** descartar a simulação: ele repontua quem está no formulário, e só volta ao exemplo se um retreino tiver mudado as colunas a ponto de o cliente editado não caber mais no contrato. Dois botões, dois efeitos, e cada um diz no rótulo qual é o seu.
 
 `personalStatus` continua na tela e continua **não editável** — porque não é enviado. É a mesma decisão de sempre, agora visível: o campo que a auditoria usa e a decisão não.
 
@@ -298,21 +321,25 @@ Era a última limitação da lista deste documento que ninguém conseguia ver ac
 
 ### Modo treinamento
 
-A mesma rede tem duas coisas para contar: **como ela decide** e **como ela aprendeu a decidir**. O seletor no topo troca entre as duas, e a coluna do meio — os nós e as ligações — é a mesma nas duas. É de propósito: não são duas telas, é a mesma rede vista por outro ângulo.
+A mesma rede tem mais de uma coisa para contar: **como ela decide**, **como ela aprendeu a decidir** e **quanto ela vale**. O seletor no topo troca entre as três, e a coluna do meio — os nós e as ligações — é a mesma na análise e no treino. É de propósito: não são telas diferentes, é a mesma rede vista por outro ângulo.
+
+Trocar de modo **não descarta a simulação**: quem editou seis campos, foi ver a curva do treino e voltou encontra os seis campos como deixou. A análise é remontada a partir do cliente que estava no formulário, não do exemplo — perder a simulação em silêncio seria pior do que perdê-la com aviso, porque a tela pareceria correta.
+
+O seletor é um `radiogroup` de verdade, e se comporta como um: o grupo inteiro é **uma** parada de tabulação, e as setas percorrem os três modos, movendo foco e marcação no mesmo gesto. Um papel ARIA que anuncia "botão de opção" e não responde às setas é pior do que nenhum.
 
 ```text
    Passo à frente  │  Erro medido  │  Passo atrás  │  Pesos ajustados
    ────────────────┴───────────────┴───────────────┴─────────────────
-                            ▶ época 7 de 25
+                            ▶ época 7 de 33
 
   COMO FOI TREINADO          O LAÇO DO TREINO           A CURVA DO TREINO
-                                                          0.78 ╲
+                                                          0.80 ╲
   800 clientes de treino      ○ ─── ○ ─── ○                    ╲╲___ treino
   57 → 16 → 8 → 1          ╱  │ ╳  │ ╳  │  ╲                    ╲   ‾‾‾──
   1.073 parâmetros        ●   ○ ─── ○ ─── ○   ●                  ╲__
   Lotes de 32              ╲  │ ╳  │ ╳  │  ╱                        ‾‾──── validação
-  L2 0.003 · dropout 0.2      ○ ─── ○ ─── ○                  0.42        ┆ melhor: 20
-  Parou na época 25 de 40                                      1        25
+  L2 0.003 · dropout 0.2      ○ ─── ○ ─── ○                  0.42        ┆ melhor: 28
+  Parou na época 33 de 40                                      1        33
 ```
 
 **A curva é medida; a animação é esquema.** A distinção é explícita na tela porque as duas coisas têm status diferentes:
@@ -322,7 +349,7 @@ A mesma rede tem duas coisas para contar: **como ela decide** e **como ela apren
 
 O passo atrás inverte o sentido dos pontos que percorrem as ligações. Não há um segundo conjunto de curvas para isso: é a mesma animação ao contrário, porque é literalmente o que a retropropagação faz — o erro volta pelas **mesmas** ligações por onde o dado veio.
 
-**As duas linhas são o argumento do projeto em uma imagem.** A de treino continua caindo até o fim; a de validação achata na época 20 e não melhora mais. A distância entre as duas é o modelo decorando em vez de aprender, e as cinco épocas entre a melhor validação e a parada são exatamente a paciência do *early stopping*. É o laço do fluxograma do README, com números.
+**As duas linhas são o argumento do projeto em uma imagem.** A de treino continua caindo até o fim; a de validação achata na época 28 e não melhora mais. A distância entre as duas é o modelo decorando em vez de aprender, e as cinco épocas entre a melhor validação e a parada (28 → 33) são exatamente a paciência do *early stopping*. É o laço do fluxograma do README, com números.
 
 Sob `prefers-reduced-motion` o laço não roda sozinho: a curva aparece inteira e a barra de épocas continua funcionando. A informação é a mesma; o que some é o movimento.
 
@@ -335,8 +362,8 @@ O `model.fit` sempre devolveu o histórico e ele sempre foi descartado. Agora el
   "customers": 800, "units": [16, 8], "l2": 0.003, "dropout": 0.2,
   "epochs": 40, "batchSize": 32, "validationSplit": 0.2, "patience": 5,
   "history": {
-    "loss":    [0.7539, 0.7111, 0.689,  "…", 0.5334],
-    "valLoss": [0.6407, 0.5809, 0.55,   "…", 0.4479]
+    "loss":    [0.7763, 0.7297, 0.7023, "…", 0.5278],
+    "valLoss": [0.6474, 0.5966, 0.558,  "…", 0.4503]
   }
 }
 ```
@@ -359,7 +386,7 @@ O terceiro modo responde a pergunta que os outros dois não respondem: **o model
   ██████████████░░░░       ────────┼────────        marcados  65,2% ████████
   Chutar         70,0%      8 FN   │   52 TP        real      30,3% ████
   █████████████░░░░░                                Homens        n=134
-                           precision 43,7%          marcados  53,7% ██████
+                           precision 43,7%          marcados  56,7% ██████
   AUC 0,7417               recall    86,7%          real      29,9% ████
   treino−teste 7,6%        F1        58,1%          razão de aprovação 0,805
 ```
@@ -415,9 +442,12 @@ web/
 ├── styles/tokens.css   cores, espaçamento, raio, sombra e tema claro/escuro
 ├── styles/app.css      layout
 └── js/
+    ├── app.js          bootstrap: busca, mapeia, entrega e cuida dos estados
     ├── api.js          fetch — devolve os DTOs como o serviço os escreve
     ├── domain.js       o vocabulário: `checkingStatus = 0` → "saldo negativo"
     ├── mappers.js      DTO → dados do componente (funções puras)
+    ├── dom.js          três utilitários; todo texto entra por `textContent`
+    ├── training-player.js  o relógio do laço do treino — não desenha nada
     ├── mock.js         temporário, só para `?mock=1`
     └── components/     custom elements
 ```

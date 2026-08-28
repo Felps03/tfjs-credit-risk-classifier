@@ -58,16 +58,37 @@ let schemaAtual = null;
 let clienteAtual = null;
 let scoreAtual = null;
 
-const carregar = async () => {
+// `preservarCliente` é o que separa os dois botões que recarregam. O
+// "Reprocessar" do topo recarrega o PACOTE e repontua quem está no
+// formulário: quem editou seis campos e clicou ali queria pontuar de
+// novo, não voltar ao exemplo — voltar ao exemplo é o que o "Restaurar
+// exemplo" faz, e ele diz isso no rótulo. O "Tentar de novo" do estado de
+// erro não preserva nada, porque ali não há nada preservado.
+const carregar = async ({ preservarCliente = false } = {}) => {
+  const anterior = preservarCliente ? clienteAtual : null;
+
   flow.state = 'loading';
 
   try {
     const dtos = usarMock ? await fetchAnalysisMock() : await fetchAnalysis();
-    const dados = toFlowData(dtos);
+
+    // A simulação só é reaproveitada se ainda couber no contrato que
+    // acabou de chegar. Um retreino que mude as colunas invalida o
+    // cliente antigo, e insistir nele renderia um 400 — nesse caso o
+    // exemplo novo é a resposta certa.
+    const cabeNoContrato = anterior !== null
+      && Object.keys(dtos.customer).every((campo) => campo in anterior);
+
+    const customer = cabeNoContrato ? anterior : dtos.customer;
+    const score = cabeNoContrato
+      ? await (usarMock ? scoreMock(customer) : fetchScore(customer))
+      : dtos.score;
+
+    const dados = toFlowData({ schema: dtos.schema, score, customer });
 
     schemaAtual = dtos.schema;
-    clienteAtual = dtos.customer;
-    scoreAtual = dtos.score;
+    clienteAtual = customer;
+    scoreAtual = score;
     renderizarStats(toStats(dtos.schema));
 
     // As ligações do modo treinamento saem daqui e não do componente: são
@@ -138,8 +159,8 @@ flow.addEventListener('flow-customer-change', (evento) => {
   agendada = setTimeout(() => repontuar(evento.detail.customer), ESPERA);
 });
 
-flow.addEventListener('flow-retry', carregar);
-botaoRecarregar?.addEventListener('click', carregar);
+flow.addEventListener('flow-retry', () => carregar());
+botaoRecarregar?.addEventListener('click', () => carregar({ preservarCliente: true }));
 
 // --------------------------------------------------
 // Troca de modo
@@ -230,7 +251,13 @@ const trocarModo = (modo) => {
   }
 
   botoesModo.forEach((botao) => {
-    botao.setAttribute('aria-checked', String(botao.dataset.mode === modo));
+    const ativo = botao.dataset.mode === modo;
+
+    botao.setAttribute('aria-checked', String(ativo));
+
+    // O `tabindex` acompanha a marcação: o grupo inteiro é UMA parada de
+    // tabulação, e ela cai sempre na opção que está valendo.
+    botao.tabIndex = ativo ? 0 : -1;
   });
 
   if (modo === 'analise' && schemaAtual && clienteAtual && scoreAtual) {
@@ -246,8 +273,41 @@ const trocarModo = (modo) => {
   flow.mode = modo;
 };
 
-botoesModo.forEach((botao) => {
+// Num `radiogroup`, escolher É navegar: a seta move o foco e marca a
+// opção no mesmo gesto — não existe "focado mas não marcado". Home e End
+// vão às pontas, e o `preventDefault` impede que a seta role a página
+// enquanto alguém percorre os modos.
+const PASSO_DA_SETA = {
+  ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1,
+};
+
+const irParaModo = (indice) => {
+  const alvo = botoesModo[(indice + botoesModo.length) % botoesModo.length];
+
+  trocarModo(alvo.dataset.mode);
+  alvo.focus();
+};
+
+botoesModo.forEach((botao, indice) => {
   botao.addEventListener('click', () => trocarModo(botao.dataset.mode));
+
+  botao.addEventListener('keydown', (evento) => {
+    if (evento.key === 'Home' || evento.key === 'End') {
+      evento.preventDefault();
+      irParaModo(evento.key === 'Home' ? 0 : botoesModo.length - 1);
+
+      return;
+    }
+
+    const passo = PASSO_DA_SETA[evento.key];
+
+    if (passo === undefined) {
+      return;
+    }
+
+    evento.preventDefault();
+    irParaModo(indice + passo);
+  });
 });
 
 // --------------------------------------------------
