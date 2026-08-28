@@ -42,6 +42,26 @@ const SYNTHETIC_LABEL_NOISE = 0.02;
 // Limiar de decisão do classificador: escolha de negócio, não do modelo.
 const DECISION_THRESHOLD = 0.5;
 
+// Regularização: os dois freios contra decorar o treino.
+//
+// O modelo real tem 1.073 parâmetros para 640 linhas de treino efetivo.
+// Com mais parâmetros do que dados, decorar é o caminho mais barato para
+// baixar o erro — e a conta chega no teste, não no treino. Os dois freios
+// atacam o mesmo problema por caminhos diferentes:
+//
+//   L2       soma λ·Σw² à loss do treino. Peso grande passa a custar caro,
+//            então a rede só paga por um se ele render redução de erro
+//            suficiente. Achata os pesos; não zera nenhum.
+//   dropout  desliga uma fração das unidades a cada passo do treino.
+//            Nenhuma unidade pode contar com uma vizinha específica, então
+//            a informação precisa ficar distribuída em vez de concentrada.
+//
+// Os valores não vieram de convenção: saíram de uma varredura de 6 × 5
+// combinações sobre 15 divisões, medindo a diferença treino−teste. O
+// README registra a grade inteira.
+const L2_LAMBDA = 0.003;
+const DROPOUT_RATE = 0.2;
+
 // Pasta onde o modelo treinado é persistido (ignorada pelo git).
 const MODEL_DIR = path.join(__dirname, 'model');
 
@@ -656,6 +676,13 @@ const SYNTHETIC_SOURCE = {
   fitScaler: () => null,
   toVector: (customer) => toFeatureVector(customer),
 
+  // Sem regularização, e isso foi MEDIDO, não herdado. São 225 parâmetros
+  // para 768 linhas de treino efetivo: a capacidade já cabe no dado, e a
+  // diferença treino−teste é 0.0067 ± 0.0058 — indistinguível de zero.
+  // Não há o que frear aqui, e frear cobra: com os valores do dataset
+  // real, a AUC cai de 0.9635 para 0.9567 e o custo mínimo sobe 21%.
+  regularization: { l2: 0, dropout: 0 },
+
   sampleCustomer: {
     income: 3500,
     debtRatio: 0.72,
@@ -667,10 +694,19 @@ const SYNTHETIC_SOURCE = {
 // As duas variantes do dataset real diferem em UMA coisa: como as colunas
 // qualitativas viram números. Tudo o mais — arquivo, leitura, escala,
 // cliente de exemplo — é idêntico, então a fábrica evita duplicar.
-const createGermanSource = ({ id, label, encoding }) => ({
+// As duas variantes compartilham os freios porque compartilham o problema:
+// é o mesmo dataset, com 1.073 ou 465 parâmetros para as mesmas 640 linhas.
+// A grade medida separadamente para cada uma dá o mesmo veredito.
+const createGermanSource = ({
   id,
   label,
   encoding,
+  regularization = { l2: L2_LAMBDA, dropout: DROPOUT_RATE },
+}) => ({
+  id,
+  label,
+  encoding,
+  regularization,
   csvPath: GERMAN_CSV_PATH,
   columns: GERMAN_COLUMNS,
   precision: GERMAN_PRECISION,
@@ -767,6 +803,54 @@ const resolveSourceId = (argv = []) => {
   return id;
 };
 
+// Os dois freios também são ajustáveis pela linha de comando, para que o
+// efeito possa ser VISTO em vez de lido:
+//
+//   node index.js --l2=0 --dropout=0
+//
+// devolve exatamente a rede de antes deste item, e a diferença
+// treino−teste que o `main` imprime volta a abrir.
+const parseNumericFlag = (argv, name, fallback, highest) => {
+  const prefix = `--${name}=`;
+  const flag = argv.find((argument) => argument.startsWith(prefix));
+
+  if (!flag) {
+    return fallback;
+  }
+
+  const raw = flag.slice(prefix.length);
+  const value = Number(raw);
+
+  // `Number('')` é 0, e `Number(' ')` também. Sem a primeira condição,
+  // `--l2=` desligaria a penalidade em silêncio — o pior tipo de erro de
+  // configuração, porque o programa roda e o resultado parece legítimo.
+  if (raw.trim() === '' || !Number.isFinite(value) || value < 0 || value > highest) {
+    throw new Error(
+      `Valor inválido para --${name}: ${raw}. Use um número entre 0 e ${highest}.`,
+    );
+  }
+
+  return value;
+};
+
+// Devolve APENAS o que foi pedido explicitamente. O que não vier daqui
+// fica com o valor que a FONTE declara, porque a intensidade certa
+// depende da razão entre parâmetros e linhas — e essa razão é
+// propriedade do dataset, não do laboratório.
+//
+// O teto do dropout é 0.9 de propósito: com taxa 1 a camada zeraria tudo
+// que recebe e o treino não teria sinal nenhum para seguir.
+const resolveRegularization = (argv = []) => {
+  const pedido = {
+    l2: parseNumericFlag(argv, 'l2', null, 1),
+    dropout: parseNumericFlag(argv, 'dropout', null, 0.9),
+  };
+
+  return Object.fromEntries(
+    Object.entries(pedido).filter(([, value]) => value !== null),
+  );
+};
+
 // --------------------------------------------------
 // 9. Separar treino e teste
 // --------------------------------------------------
@@ -828,26 +912,47 @@ const compileModel = (model) => {
   return model;
 };
 
+// A penalidade L2 precisa de uma instância por camada, mas a intensidade
+// é a mesma em todas. `null` é o valor que o tfjs entende como "sem
+// regularizador", então desligar o freio não exige um segundo caminho de
+// código — só um argumento diferente.
+const createRegularizer = (l2 = L2_LAMBDA) =>
+  (l2 > 0 ? tf.regularizers.l2({ l2 }) : null);
+
 // O número de entradas vem da fonte de dados: o sintético tem 4 features,
-// o German Credit tem 8. Era a única parte da rede que precisava saber
-// qual dataset está em uso.
-const buildModel = (inputSize = 4) => {
+// o German Credit tem 19 ou 57 conforme a codificação. Era a única parte
+// da rede que precisava saber qual dataset está em uso — os dois freios
+// entraram como argumento pelo mesmo motivo: para poderem ser desligados
+// e medidos, em vez de aceitos.
+const buildModel = (inputSize = 4, options = {}) => {
+  const { l2 = L2_LAMBDA, dropout = DROPOUT_RATE } = options;
   const model = tf.sequential();
 
-  model.add(tf.layers.dense({
-    inputShape: [inputSize],
-    units: 16,
-    activation: 'relu',
-  }));
+  // Com `dropout: 0` a camada é OMITIDA, não adicionada com taxa zero.
+  // Uma camada inerte apareceria no `model.summary()` e no `model.json`
+  // salvo em disco sugerindo um freio que não existe.
+  const addHidden = (units, shape = {}) => {
+    model.add(tf.layers.dense({
+      ...shape,
+      units,
+      activation: 'relu',
+      kernelRegularizer: createRegularizer(l2),
+    }));
 
-  model.add(tf.layers.dense({
-    units: 8,
-    activation: 'relu',
-  }));
+    if (dropout > 0) {
+      model.add(tf.layers.dropout({ rate: dropout }));
+    }
+  };
 
+  addHidden(16, { inputShape: [inputSize] });
+  addHidden(8);
+
+  // A saída não leva dropout. Descartar a única unidade que produz a
+  // resposta não removeria um caminho redundante — apagaria a predição.
   model.add(tf.layers.dense({
     units: 1,
     activation: 'sigmoid',
+    kernelRegularizer: createRegularizer(l2),
   }));
 
   return compileModel(model);
@@ -1246,8 +1351,11 @@ const evaluateModel = (model, xTest, yTest) => {
 // --------------------------------------------------
 // 17. Treinar, avaliar, salvar, recarregar e prever
 // --------------------------------------------------
-const main = async (sourceId = DEFAULT_SOURCE_ID) => {
+const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const source = SOURCES[sourceId];
+
+  // A fonte decide; a linha de comando tem a última palavra.
+  const { l2, dropout } = { ...source.regularization, ...overrides };
 
   // O sintético se gera se faltar; o real só confere que está em disco.
   source.ensure();
@@ -1279,7 +1387,9 @@ const main = async (sourceId = DEFAULT_SOURCE_ID) => {
   const xTest = tf.tensor2d(testCustomers.map(toVector));
   const yTest = tf.tensor2d(testLabels);
 
-  const model = buildModel(source.featureNames.length);
+  const model = buildModel(source.featureNames.length, { l2, dropout });
+
+  console.log(`Regularização: L2 = ${l2}, dropout = ${dropout}`);
   model.summary();
 
   await model.fit(xTrain, yTrain, {
@@ -1295,6 +1405,10 @@ const main = async (sourceId = DEFAULT_SOURCE_ID) => {
     ],
   });
 
+  // O mesmo modelo avaliado nos dois conjuntos. `evaluate` roda em modo de
+  // inferência, então o dropout está DESLIGADO nas duas medidas — é a
+  // comparação justa, e não a acurácia pessimista que o `fit` imprime.
+  const { accuracy: trainAccuracy } = evaluateModel(model, xTrain, yTrain);
   const { loss: testLoss, accuracy: testAccuracy } =
     evaluateModel(model, xTest, yTest);
 
@@ -1304,8 +1418,17 @@ const main = async (sourceId = DEFAULT_SOURCE_ID) => {
   const baseline = majorityBaseline(testLabels);
 
   console.log('Test loss:', testLoss.toFixed(4));
+  console.log('Train accuracy:', trainAccuracy.toFixed(4));
   console.log('Test accuracy:', testAccuracy.toFixed(4));
   console.log('Baseline (classe majoritária):', baseline.toFixed(4));
+
+  // O termômetro do overfitting. Quanto o modelo vai melhor no que já viu
+  // do que no que não viu é exatamente o que os dois freios existem para
+  // encolher — e `--l2=0 --dropout=0` mostra o número sem eles.
+  console.log(
+    'Diferença treino − teste:',
+    (trainAccuracy - testAccuracy).toFixed(4),
+  );
 
   const confusion = computeConfusionMatrix(model, xTest, yTest);
 
@@ -1436,7 +1559,9 @@ if (require.main === module) {
   // virar rejeição e cair no mesmo `.catch` dos erros assíncronos. Sem
   // isso, um argumento inválido imprimiria stack trace no lugar da
   // mensagem que diz quais fontes existem.
-  const run = async () => main(resolveSourceId(process.argv.slice(2)));
+  const argv = process.argv.slice(2);
+  const run = async () =>
+    main(resolveSourceId(argv), resolveRegularization(argv));
 
   run().catch((error) => {
     console.error(`\n${error.message}\n`);
@@ -1456,6 +1581,8 @@ module.exports = {
   SYNTHETIC_LABEL_NOISE,
   SYNTHETIC_BOUNDS,
   DECISION_THRESHOLD,
+  L2_LAMBDA,
+  DROPOUT_RATE,
   MODEL_DIR,
   CSV_PATH,
   CSV_COLUMNS,
@@ -1509,6 +1636,8 @@ module.exports = {
   SOURCES,
   DEFAULT_SOURCE_ID,
   resolveSourceId,
+  parseNumericFlag,
+  resolveRegularization,
   createRandom,
   shuffle,
   splitCustomers,
@@ -1517,6 +1646,7 @@ module.exports = {
   loadDatasetCsv,
   splitDataset,
   compileModel,
+  createRegularizer,
   buildModel,
   saveModel,
   loadModel,

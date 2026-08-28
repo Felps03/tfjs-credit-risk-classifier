@@ -36,6 +36,11 @@ const {
   CSV_COLUMNS,
   CSV_LABEL_COLUMN,
   splitDataset,
+  L2_LAMBDA,
+  DROPOUT_RATE,
+  createRegularizer,
+  parseNumericFlag,
+  resolveRegularization,
   buildModel,
   saveModel,
   loadModel,
@@ -1093,12 +1098,15 @@ describe('buildModel', () => {
 
   after(() => model.dispose());
 
-  it('dado o modelo construído, quando as camadas são contadas, então há 3 camadas densas', () => {
-    // Given / When
-    const total = model.layers.length;
+  it('dado o modelo construído, quando as camadas são contadas, então há 3 densas e 2 de dropout', () => {
+    // Given — dropout entra depois de cada camada OCULTA, nunca da saída
+    const densas = model.layers.filter((layer) => layer.getClassName() === 'Dense');
+    const dropouts = model.layers.filter((layer) => layer.getClassName() === 'Dropout');
 
-    // Then
-    assert.equal(total, 3);
+    // When / Then
+    assert.equal(densas.length, 3);
+    assert.equal(dropouts.length, 2);
+    assert.equal(model.layers.length, 5);
   });
 
   it('dado o modelo construído, quando a entrada é inspecionada, então aceita 4 features', () => {
@@ -1130,9 +1138,9 @@ describe('buildModel', () => {
 
   it('dado o modelo construído, quando as ativações são lidas, então são relu, relu e sigmoid', () => {
     // Given / When
-    const ativacoes = model.layers.map(
-      (layer) => layer.getConfig().activation,
-    );
+    const ativacoes = model.layers
+      .filter((layer) => layer.getClassName() === 'Dense')
+      .map((layer) => layer.getConfig().activation);
 
     // Then
     assert.deepEqual(ativacoes, ['relu', 'relu', 'sigmoid']);
@@ -1167,6 +1175,334 @@ describe('buildModel', () => {
       probability >= 0 && probability <= 1,
       `sigmoid deve saturar em [0, 1], recebido ${probability}`,
     );
+  });
+});
+
+// ==================================================
+// Regularização: L2 e dropout
+// ==================================================
+describe('createRegularizer', () => {
+  it('dado um lambda positivo, quando o regularizador é criado, então devolve um L2 com esse lambda', () => {
+    // Given / When
+    const regularizer = createRegularizer(0.01);
+
+    // Then
+    assert.notEqual(regularizer, null);
+    // O tfjs implementa L1 e L2 na mesma classe: `regularizers.l2()` é um
+    // L1L2 com l1 = 0. O que importa é onde o lambda foi parar.
+    assert.equal(regularizer.getClassName(), 'L1L2');
+    assert.equal(regularizer.getConfig().l1, 0);
+    assert.ok(
+      Math.abs(regularizer.getConfig().l2 - 0.01) < 1e-9,
+      `lambda deveria chegar intacto, recebido ${regularizer.getConfig().l2}`,
+    );
+  });
+
+  it('dado lambda zero, quando o regularizador é criado, então devolve null em vez de uma penalidade de peso zero', () => {
+    // Given — `null` é o que o tfjs entende como "sem regularizador";
+    // um L2 com lambda 0 seria matematicamente inerte, mas apareceria
+    // no model.json sugerindo um freio que não existe.
+    // When / Then
+    assert.equal(createRegularizer(0), null);
+  });
+
+  it('dado nenhum argumento, quando o regularizador é criado, então usa a constante do laboratório', () => {
+    // Given / When
+    const regularizer = createRegularizer();
+
+    // Then
+    assert.equal(regularizer.getConfig().l2, L2_LAMBDA);
+  });
+});
+
+describe('buildModel — regularização', () => {
+  it('dados os padrões, quando o modelo é criado, então toda camada densa carrega o regularizador L2', () => {
+    // Given
+    const model = buildModel();
+
+    // When
+    const densas = model.layers.filter((layer) => layer.getClassName() === 'Dense');
+
+    // Then
+    assert.equal(densas.length, 3);
+    densas.forEach((layer) => {
+      assert.notEqual(layer.kernelRegularizer, null, `${layer.name} ficou sem L2`);
+      assert.equal(layer.kernelRegularizer.getConfig().l2, L2_LAMBDA);
+    });
+
+    model.dispose();
+  });
+
+  it('dado l2 igual a zero, quando o modelo é criado, então nenhuma camada tem regularizador', () => {
+    // Given
+    const model = buildModel(4, { l2: 0 });
+
+    // When
+    const comPenalidade = model.layers.filter((layer) => layer.kernelRegularizer);
+
+    // Then
+    assert.deepEqual(comPenalidade, []);
+    model.dispose();
+  });
+
+  it('dado dropout igual a zero, quando o modelo é criado, então a topologia volta a ser a de três camadas', () => {
+    // Given — é a rede de antes deste item, byte a byte na topologia
+    const model = buildModel(4, { l2: 0, dropout: 0 });
+
+    // When / Then
+    assert.equal(model.layers.length, 3);
+    assert.deepEqual(
+      model.layers.map((layer) => layer.getClassName()),
+      ['Dense', 'Dense', 'Dense'],
+    );
+
+    model.dispose();
+  });
+
+  it('dada uma taxa de dropout, quando o modelo é criado, então ela chega nas duas camadas', () => {
+    // Given
+    const model = buildModel(4, { dropout: 0.35 });
+
+    // When
+    const taxas = model.layers
+      .filter((layer) => layer.getClassName() === 'Dropout')
+      .map((layer) => layer.getConfig().rate);
+
+    // Then
+    assert.deepEqual(taxas, [0.35, 0.35]);
+    model.dispose();
+  });
+
+  it('dado o modelo com dropout, quando a última camada é lida, então é a densa de saída — a saída não leva dropout', () => {
+    // Given
+    const model = buildModel();
+
+    // When
+    const ultima = model.layers.at(-1);
+
+    // Then — descartar a única unidade de saída apagaria a predição
+    assert.equal(ultima.getClassName(), 'Dense');
+    assert.equal(ultima.getConfig().units, 1);
+    model.dispose();
+  });
+
+  it('dado dropout ligado e desligado, quando os parâmetros são contados, então o total não muda', () => {
+    // Given — dropout não tem peso nenhum: ele apenas zera ativações
+    const comDropout = buildModel(57);
+    const semDropout = buildModel(57, { dropout: 0 });
+
+    // When / Then
+    assert.equal(comDropout.countParams(), semDropout.countParams());
+    assert.equal(comDropout.countParams(), 1073);
+
+    comDropout.dispose();
+    semDropout.dispose();
+  });
+});
+
+describe('resolveRegularization', () => {
+  it('dado nenhum argumento, quando as flags são resolvidas, então devolve vazio — quem decide é a fonte', () => {
+    // Given — o objeto vazio é o que faz `{ ...source.regularization }`
+    // sobreviver intacto ao espalhamento no `main`
+    const resolvido = resolveRegularization([]);
+
+    // When / Then
+    assert.deepEqual(resolvido, {});
+  });
+
+  it('dadas as duas flags zeradas, quando são resolvidas, então desligam os dois freios', () => {
+    // Given / When
+    const resolvido = resolveRegularization(['--l2=0', '--dropout=0']);
+
+    // Then
+    assert.deepEqual(resolvido, { l2: 0, dropout: 0 });
+  });
+
+  it('dada só uma das flags, quando é resolvida, então a outra não aparece e a fonte mantém a dela', () => {
+    // Given / When
+    const resolvido = resolveRegularization(['--source=synthetic', '--l2=0.05']);
+
+    // Then
+    assert.deepEqual(resolvido, { l2: 0.05 });
+    assert.ok(!('dropout' in resolvido), 'dropout não pedido não deve virar chave');
+  });
+
+  it('dado um valor não numérico, quando é resolvido, então explica o que é aceito', () => {
+    // Given / When / Then
+    assert.throws(
+      () => resolveRegularization(['--l2=muito']),
+      /Valor inválido para --l2: muito.*entre 0 e 1/s,
+    );
+  });
+
+  it('dado um valor negativo, quando é resolvido, então falha — penalidade negativa premiaria peso grande', () => {
+    // Given / When / Then
+    assert.throws(() => resolveRegularization(['--l2=-1']), /Valor inválido/);
+  });
+
+  it('dado dropout acima do teto, quando é resolvido, então falha — taxa 1 zeraria a camada inteira', () => {
+    // Given / When / Then
+    assert.throws(
+      () => resolveRegularization(['--dropout=1']),
+      /Valor inválido para --dropout: 1.*entre 0 e 0\.9/s,
+    );
+  });
+});
+
+describe('regularização por fonte', () => {
+  it('dada a fonte sintética, quando a regularização é lida, então os dois freios estão desligados', () => {
+    // Given — 225 parâmetros para 768 linhas: não há capacidade sobrando,
+    // e a medição mostra que frear aqui só cobra
+    assert.deepEqual(SYNTHETIC_SOURCE.regularization, { l2: 0, dropout: 0 });
+  });
+
+  it('dadas as fontes do German Credit, quando a regularização é lida, então usam as constantes do laboratório', () => {
+    // Given — é o dataset com 1.073 (ou 465) parâmetros para 640 linhas
+    [GERMAN_SOURCE, GERMAN_ORDINAL_SOURCE].forEach((source) => {
+      assert.deepEqual(
+        source.regularization,
+        { l2: L2_LAMBDA, dropout: DROPOUT_RATE },
+        `fonte ${source.id}`,
+      );
+    });
+  });
+
+  it('dadas as duas variantes do German, quando comparadas, então diferem apenas na codificação', () => {
+    // Given — a regularização não pode virar uma segunda diferença
+    assert.notEqual(GERMAN_SOURCE.encoding, GERMAN_ORDINAL_SOURCE.encoding);
+    assert.deepEqual(
+      GERMAN_SOURCE.regularization,
+      GERMAN_ORDINAL_SOURCE.regularization,
+    );
+  });
+
+  it('dada a fonte e uma flag, quando são mescladas, então a linha de comando vence', () => {
+    // Given — é a mesma mesclagem que o `main` faz
+    const daFonte = SYNTHETIC_SOURCE.regularization;
+    const daLinha = resolveRegularization(['--dropout=0.4']);
+
+    // When
+    const efetivo = { ...daFonte, ...daLinha };
+
+    // Then
+    assert.deepEqual(efetivo, { l2: 0, dropout: 0.4 });
+  });
+
+  it('dada a fonte sem flag nenhuma, quando são mescladas, então nada da fonte é sobrescrito', () => {
+    // Given / When
+    const efetivo = { ...GERMAN_SOURCE.regularization, ...resolveRegularization([]) };
+
+    // Then
+    assert.deepEqual(efetivo, { l2: L2_LAMBDA, dropout: DROPOUT_RATE });
+  });
+});
+
+describe('parseNumericFlag', () => {
+  it('dado que a flag não aparece, quando é lida, então devolve o padrão', () => {
+    // Given / When / Then
+    assert.equal(parseNumericFlag(['--outra=3'], 'l2', 0.007, 1), 0.007);
+  });
+
+  it('dada a flag presente, quando é lida, então o texto vira número', () => {
+    // Given / When
+    const valor = parseNumericFlag(['--l2=0.25'], 'l2', 0.007, 1);
+
+    // Then
+    assert.equal(valor, 0.25);
+    assert.equal(typeof valor, 'number');
+  });
+
+  it('dado o valor exatamente no teto, quando é lido, então é aceito', () => {
+    // Given — o limite é inclusivo dos dois lados
+    assert.equal(parseNumericFlag(['--r=0.9'], 'r', 0.1, 0.9), 0.9);
+    assert.equal(parseNumericFlag(['--r=0'], 'r', 0.1, 0.9), 0);
+  });
+
+  it('dado um valor vazio, quando é lido, então falha em vez de virar zero silenciosamente', () => {
+    // Given — `Number('')` é 0, e aceitar isso desligaria o freio sem avisar
+    assert.throws(() => parseNumericFlag(['--l2='], 'l2', 0.007, 1), /Valor inválido/);
+  });
+});
+
+describe('dropout e L2 no comportamento do modelo', () => {
+  const tf = require('@tensorflow/tfjs-node');
+
+  it('dado um modelo com dropout, quando prevê duas vezes, então devolve o mesmo valor — inferência desliga o dropout', () => {
+    // Given — taxa altíssima: se o dropout agisse aqui, os dois valores
+    // seriam diferentes com probabilidade praticamente 1
+    const model = buildModel(4, { l2: 0, dropout: 0.9 });
+    const input = tf.tensor2d([[0.5, 0.5, 0.5, 0.5]]);
+
+    // When
+    const primeira = model.predict(input);
+    const segunda = model.predict(input);
+    const [a, b] = [primeira.dataSync()[0], segunda.dataSync()[0]];
+
+    // Then
+    assert.equal(a, b);
+
+    tf.dispose([input, primeira, segunda]);
+    model.dispose();
+  });
+
+  it('dados os mesmos pesos com e sem L2, quando são avaliados, então a loss é idêntica — evaluate não cobra a penalidade', () => {
+    // Given — no tfjs a penalidade entra na loss do TREINO, não na de
+    // avaliação. É por isso que o `Test loss` que o main imprime continua
+    // comparável com o de antes deste item.
+    const semPenalidade = buildModel(4, { l2: 0, dropout: 0 });
+    const comPenalidade = buildModel(4, { l2: 10, dropout: 0 });
+    comPenalidade.setWeights(semPenalidade.getWeights());
+
+    const x = tf.tensor2d([[0.2, 0.4, 0.6, 0.8], [0.9, 0.1, 0.3, 0.7]]);
+    const y = tf.tensor2d([[1], [0]]);
+
+    // When
+    const { loss: lossSem } = evaluateModel(semPenalidade, x, y);
+    const { loss: lossCom } = evaluateModel(comPenalidade, x, y);
+
+    // Then
+    assert.ok(
+      Math.abs(lossSem - lossCom) < 1e-6,
+      `evaluate não deveria somar λ·Σw², recebido ${lossSem} e ${lossCom}`,
+    );
+
+    tf.dispose([x, y]);
+    semPenalidade.dispose();
+    comPenalidade.dispose();
+  });
+
+  it('dado um modelo regularizado salvo em disco, quando é recarregado, então prevê exatamente o mesmo', () => {
+    // Given — dropout e L2 precisam sobreviver à serialização; o dropout
+    // some da conta na inferência, mas não pode sumir da topologia.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reg-'));
+    const model = buildModel(4);
+    const customer = {
+      income: 3500,
+      debtRatio: 0.72,
+      latePayments: 3,
+      creditUtilization: 0.88,
+    };
+
+    return saveModel(model, dir)
+      .then(() => loadModel(dir))
+      .then((recarregado) => {
+        // When
+        const antes = predictRisk(model, customer);
+        const depois = predictRisk(recarregado, customer);
+        const densas = recarregado.layers
+          .filter((layer) => layer.getClassName() === 'Dense');
+
+        // Then
+        assert.equal(antes, depois);
+        assert.equal(recarregado.layers.length, 5);
+        densas.forEach((layer) => {
+          assert.equal(layer.kernelRegularizer.getConfig().l2, L2_LAMBDA);
+        });
+
+        model.dispose();
+        recarregado.dispose();
+        fs.rmSync(dir, { recursive: true, force: true });
+      });
   });
 });
 
@@ -2637,6 +2973,7 @@ describe('SOURCES / resolveSourceId', () => {
     const obrigatorios = [
       'id', 'label', 'csvPath', 'columns', 'precision', 'featureNames',
       'ensure', 'read', 'fitScaler', 'toVector', 'sampleCustomer',
+      'regularization',
     ];
 
     // When / Then

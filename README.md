@@ -52,6 +52,10 @@ O laço entre **Treinamento** e **Validação** é o coração do processo: a ca
   - [A coluna que o modelo não recebeu](#a-coluna-que-o-modelo-não-recebeu)
   - [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset)
 - [Arquitetura da rede](#-arquitetura-da-rede)
+- [Regularização: L2 e dropout](#-regularização-l2-e-dropout)
+  - [A grade inteira](#a-grade-inteira)
+  - [Cada dataset pede uma dose diferente](#cada-dataset-pede-uma-dose-diferente)
+  - [O que a regularização não conserta](#o-que-a-regularização-não-conserta)
 - [Treinamento](#-treinamento)
 - [Divisão dos dados](#-divisão-dos-dados)
 - [Matriz de confusão](#-matriz-de-confusão)
@@ -119,6 +123,15 @@ npm run start:synthetic  # dataset sintético gerado pelo projeto
 npm run fetch:german     # rebaixa o dataset real da UCI e reconverte
 npm run seed             # regenera o dataset sintético a partir do código
 ```
+
+Os dois freios contra *overfitting* são ajustáveis pela linha de comando, para que o efeito possa ser **visto** em vez de lido:
+
+```bash
+node index.js --l2=0 --dropout=0   # a rede sem regularização nenhuma
+node index.js --dropout=0.5        # só dropout, e forte
+```
+
+Cada fonte declara a **sua** dose — o dataset real vem com os freios ligados, o sintético não —, e as flags sobrescrevem o que a fonte declara. Cada execução imprime `Diferença treino − teste` logo abaixo das acurácias. É o termômetro do *overfitting*, e é o número que [a regularização existe para encolher](#-regularização-l2-e-dropout).
 
 Os dados **não** mudam entre execuções, e agora nem entre máquinas: o CSV real é fixo, e o sintético é gerado por um [PRNG com semente](#-geração-dos-dados-sintéticos) — `npm run seed` reproduz o arquivo versionado byte a byte. Os pesos iniciais da rede continuam aleatórios, então as métricas oscilam um pouco a cada rodada; é esperado, e é por isso que os números deste README são **médias de 15 execuções** com erro padrão.
 
@@ -205,8 +218,13 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede:
 | `splitCustomers`       | Proporções e ausência de sobreposição, agora sobre clientes brutos |
 | `majorityBaseline`     | Piso da classe majoritária com maioria negativa, positiva e empate |
 | `SOURCES` / `resolveSourceId` | Padrão, seleção por flag, fonte inválida, **contrato cumprido por todas as fontes**, tamanho do vetor, escala medida e mensagem acionável quando o CSV real falta |
+| Regularização por fonte | Sintético com os freios **desligados**, German com as constantes do laboratório, as duas variantes diferindo **só** na codificação e a linha de comando vencendo a fonte na mesclagem |
 | `toCsv` com schema     | Cabeçalho do German Credit e compatibilidade da chamada sem opções |
-| `buildModel`           | 3 camadas, entrada `[null, 4]` ou `[null, 57]`, saída `[null, 1]`, **225** e **1.073 parâmetros**, ativações e loss |
+| `buildModel`           | 3 densas + 2 de dropout, entrada `[null, 4]` ou `[null, 57]`, saída `[null, 1]`, **225** e **1.073 parâmetros**, ativações e loss |
+| `createRegularizer`    | Lambda chega intacto na camada e `λ = 0` devolve **`null`**, não uma penalidade inerte |
+| `buildModel` — regularização | L2 em **todas** as densas, dropout **só** depois das ocultas, `dropout: 0` restaura a topologia de 3 camadas e o total de parâmetros **não muda** |
+| `parseNumericFlag` / `resolveRegularization` | Padrões, leitura, limites inclusivos, valor negativo, dropout acima de `0.9` e **`--l2=` vazio que não vira zero em silêncio** |
+| Comportamento de L2 e dropout | Dropout **desligado na inferência** (duas predições idênticas com taxa `0.9`), `evaluate` **não** cobra a penalidade e o modelo regularizado sobrevive ao salvar/recarregar |
 | `computeConfusionMatrix` | TP/TN/FP/FN contra predições conhecidas, layout da matriz, efeito do limiar, coerência com a `accuracy` do `evaluate` e ausência de vazamento de tensores |
 | `formatConfusionMatrix` | Estrutura da tabela, as quatro contagens presentes e colunas alinhadas |
 | `computeMetrics` | Fórmulas contra cálculo manual, F1 conferido pelas duas formas, casos degenerados sem `NaN` e a média harmônica abaixo da aritmética |
@@ -661,10 +679,16 @@ Se o `min`/`max` saísse do dataset inteiro, o maior empréstimo do conjunto de 
 Trocar de dataset não exigiu tocar em treino, matriz de confusão, ROC ou escolha de limiar. Tudo que muda de um para o outro ficou em um objeto:
 
 ```javascript
-const createGermanSource = ({ id, label, encoding }) => ({
+const createGermanSource = ({
   id,
   label,
   encoding,
+  regularization = { l2: L2_LAMBDA, dropout: DROPOUT_RATE },
+}) => ({
+  id,
+  label,
+  encoding,
+  regularization,
   csvPath: GERMAN_CSV_PATH,
   featureNames: germanFeatureNames(encoding),
 
@@ -683,19 +707,26 @@ const createGermanSource = ({ id, label, encoding }) => ({
 
 São **três** fontes registradas — `synthetic`, `german` e `german-ordinal` —, e as duas do German Credit saem da mesma fábrica, diferindo só no `encoding`.
 
-A fonte sintética cumpre o mesmo contrato, com uma diferença que vale ler:
+A fonte sintética cumpre o mesmo contrato, com duas diferenças que valem ler:
 
 ```javascript
   // A escala é CONHECIDA porque nós geramos os dados: "ajustar" aqui é
   // devolver as constantes, e o argumento é ignorado de propósito.
   fitScaler: () => null,
   toVector: (customer) => toFeatureVector(customer),
+
+  // 225 parâmetros para 768 linhas: a capacidade já cabe no dado, e
+  // frear aqui só cobra. A medição está em Regularização.
+  regularization: { l2: 0, dropout: 0 },
 ```
 
-E a única parte da rede que precisou saber qual dataset está em uso foi o tamanho da entrada:
+A `regularization` entrou no contrato pelo mesmo motivo que a `fitScaler`: a intensidade certa depende da razão entre parâmetros e linhas, que é [propriedade do dataset](#cada-dataset-pede-uma-dose-diferente), não do laboratório.
+
+E a rede continua precisando saber pouquíssimo sobre qual dataset está em uso — o tamanho da entrada e a dose dos freios:
 
 ```javascript
-const model = buildModel(source.featureNames.length);   // 4, 19 ou 57
+const { l2, dropout } = { ...source.regularization, ...overrides };
+const model = buildModel(source.featureNames.length, { l2, dropout });
 ```
 
 ### O resultado — e por que ele é a melhor parte
@@ -741,24 +772,25 @@ A justificativa acima é de **correção**, não de desempenho. Vale medir a dif
 
 | Variante | Entradas | Parâmetros | AUC | Custo mínimo |
 | -------- | -------: | ---------: | --: | -----------: |
-| ordinal, 8 colunas (versão anterior) | 8 | 289 | `0.7793` ± 0.0057 | `101.4` ± 2.2 |
-| ordinal, 19 colunas | 19 | 465 | `0.7784` ± 0.0056 | `101.9` ± 2.3 |
-| **one-hot, 19 colunas** (atual) | **57** | **1.073** | `0.7776` ± 0.0070 | `99.9` ± 2.6 |
-| one-hot + L2 e dropout | 57 | 1.073 | `0.7812` ± 0.0063 | `97.2` ± 2.7 |
+| ordinal, 8 colunas (versão anterior, medição histórica) | 8 | 289 | `0.7793` ± 0.0057 | `101.4` ± 2.2 |
+| ordinal, 19 colunas, sem freio | 19 | 465 | `0.7726` ± 0.0087 | `102.8` ± 2.4 |
+| ordinal, 19 colunas (o que `start:ordinal` roda) | 19 | 465 | `0.7692` ± 0.0079 | `102.8` ± 2.4 |
+| one-hot, 19 colunas, sem freio | 57 | 1.073 | `0.7762` ± 0.0071 | `100.6` ± 3.0 |
+| **one-hot, 19 colunas** (o que `npm start` roda) | **57** | **1.073** | `0.7734` ± 0.0071 | `100.9` ± 2.6 |
 
-*(média ± erro padrão sobre 15 sementes de embaralhamento — variar a divisão, e não os pesos, é o protocolo certo aqui, pelo motivo que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede)*
+*(média ± erro padrão sobre 15 sementes de embaralhamento — variar a divisão, e não os pesos, é o protocolo certo aqui, pelo motivo que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. A primeira linha vem de uma medição anterior, com outro conjunto de sementes; as quatro últimas são do mesmo conjunto, comparáveis entre si.)*
 
-**Todas as diferenças cabem dentro de um erro padrão.** Nem a codificação correta, nem 11 colunas a mais, nem as duas juntas moveram a AUC de forma distinguível de ruído.
+**Nenhuma diferença sobrevive ao erro padrão.** Nem a codificação correta, nem 11 colunas a mais, nem [regularização](#-regularização-l2-e-dropout) moveram a AUC de forma distinguível de ruído — as quatro variantes comparáveis cabem em `0.007`, contra um erro padrão de `0.008`.
 
 Três leituras disso, todas úteis:
 
 1. **A codificação não era o gargalo.** A AUC de ~`0.78` é aproximadamente o teto publicado para o German Credit — a literatura reporta `0.76`–`0.80` para praticamente qualquer método, de regressão logística a *gradient boosting*. O limite está no sinal disponível nos dados, não em como as colunas são representadas.
 
-2. **Mais features com o mesmo dado não é ganho automático.** O modelo saltou de 289 para 1.073 parâmetros treinando com as mesmas 640 linhas efetivas. A capacidade extra foi para decorar, não para generalizar — e é exatamente isso que a linha com L2 e dropout começa a corrigir (nominalmente a melhor das quatro, ainda dentro do ruído). Motivo direto para o próximo item da lista.
+2. **Mais features com o mesmo dado não é ganho automático.** O modelo saltou de 289 para 1.073 parâmetros treinando com as mesmas 640 linhas efetivas, e a capacidade extra foi para decorar: a diferença treino−teste é `0.0707` no one-hot contra `0.0224` no ordinal. A [regularização](#-regularização-l2-e-dropout) corta essa diferença pela metade — e, como a tabela acima mostra, **sem que a AUC note**. Decorar era real e não estava custando nada de mensurável.
 
 3. **Correção e desempenho são eixos separados.** One-hot continua sendo a representação certa para `purpose`, mesmo sem mexer no número. Afirmar uma ordem que não existe é errado independentemente de a métrica notar.
 
-Um detalhe que o protocolo torna visível: **na divisão fixa do projeto, a variante ordinal vai melhor** — AUC `0.7527` ± 0.0014 contra `0.7356` ± 0.0025 do one-hot, uma diferença de várias vezes o erro padrão. Isso não contradiz a tabela acima; confirma o que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. Uma diferença que some ao trocar a divisão é uma propriedade **daquele sorteio**, não das codificações, e tratá-la como resultado seria exatamente o erro que a média de 15 sementes existe para evitar.
+Um detalhe que o protocolo torna visível: **na divisão fixa do projeto, a variante ordinal vai melhor** — AUC `0.7445` ± 0.0008 contra `0.7302` ± 0.0015 do one-hot, uma diferença de várias vezes o erro padrão. Isso não contradiz a tabela acima; confirma o que a seção [Uma divisão não é o dataset](#uma-divisão-não-é-o-dataset) mede. Uma diferença que some ao trocar a divisão é uma propriedade **daquele sorteio**, não das codificações, e tratá-la como resultado seria exatamente o erro que a média de 15 sementes existe para evitar.
 
 > 🔬 Para reproduzir a comparação: `npm start` roda one-hot e `npm run start:ordinal` roda a codificação anterior sobre as mesmas 19 colunas. A variante ordinal existe no código **só para isso** — para que a frase "one-hot é melhor" possa ser medida em vez de repetida.
 
@@ -772,10 +804,10 @@ Ele nunca entrou no modelo, e continua fora. Mas tirar a coluna resolve o proble
 Auditoria por sexo (o modelo nunca recebeu esta coluna):
 Grupo    |   N | Inadimp. real | Marcados ALTO | FN não pegos
 ---------+-----+---------------+---------------+-------------
-Mulheres |  64 |         28.1% |         65.6% |        11.1%
-Homens   | 136 |         28.7% |         59.6% |        12.8%
+Mulheres |  64 |         28.1% |         75.0% |         0.0%
+Homens   | 136 |         28.7% |         65.4% |        10.3%
 
-Razão de aprovação (regra dos 4/5): 0.850
+Razão de aprovação (regra dos 4/5): 0.723  <- abaixo de 0.80
 ```
 
 **Não resolve.** O modelo marca mulheres como alto risco com mais frequência que homens, sem nunca ter visto a coluna. Ele reconstrói o sinal por tabela: idade, moradia, tempo de emprego e valor do crédito carregam a informação, e a rede a recompõe sozinha.
@@ -788,13 +820,15 @@ O `N` das mulheres no hold-out é 64, e os pesos iniciais são aleatórios — e
 
 | | Mulheres | Homens |
 | --- | ---: | ---: |
-| N acumulado | 894 | 2.106 |
-| Inadimplência **real** | 33,6% | 26,7% |
-| Marcados ALTO pelo modelo | 65,2% | 55,9% |
+| N acumulado | 957 | 2.043 |
+| Inadimplência **real** | 34,5% | 27,5% |
+| Marcados ALTO pelo modelo | 67,0% | 63,1% |
 
-**Razão de aprovação: `0.791` ± 0.039** — abaixo de `0.80` em 6 das 15 execuções.
+**Razão de aprovação: `0.933` ± 0.052** — abaixo de `0.80` em 4 das 15 execuções.
 
-E aqui é preciso ser honesto sobre o que o número diz e o que não diz. As mulheres do dataset **de fato** têm taxa de inadimplência maior (33,6% contra 26,7%). A razão entre as taxas-base é `1.26`; a razão entre as taxas de marcação é `1.17`. Ou seja: **o modelo é menos desigual que os próprios dados** — ele atenua a diferença, não a amplifica.
+E aqui é preciso ser honesto sobre o que o número diz e o que não diz. As mulheres do dataset **de fato** têm taxa de inadimplência maior (34,5% contra 27,5%). A razão entre as taxas-base é `1.25`; a razão entre as taxas de marcação é `1.06`. Ou seja: **o modelo é bem menos desigual que os próprios dados** — ele atenua a diferença, não a amplifica.
+
+> 🔬 A [regularização](#-regularização-l2-e-dropout) não mexeu nisso: nas mesmas 15 divisões, a razão é `0.880` ± 0.047 sem os freios e `0.933` ± 0.052 com eles — indistinguíveis. Disparidade não é *overfitting*, e não sai pelo mesmo remédio.
 
 Então há discriminação? Depende do critério, e é isso que torna o caso interessante:
 
@@ -815,20 +849,20 @@ Média de **25 execuções sobre a divisão que o projeto fixa** — a mesma que
 | ------- | --------: | ------------: |
 | Entradas da rede | 4 | 57 |
 | Baseline (classe majoritária) | `0.8250` | `0.7150` |
-| Test accuracy | `0.9477` ± 0.0056 | `0.7116` ± 0.0043 |
-| **Ganho sobre o baseline** | **+12 pts** | **−0,3 pt** |
-| AUC | `0.9756` ± 0.0010 | `0.7356` ± 0.0025 |
-| Recall no limiar `0.5` | `0.7010` ± 0.0321 | `0.4007` ± 0.0073 |
-| Custo no limiar `0.5` | `56.5` ± 3.8 | `193.3` ± 2.1 |
-| Custo no limiar escolhido | `20.6` ± 1.2 | `103.8` ± 1.0 |
+| Test accuracy | `0.9508` ± 0.0057 | `0.7148` ± 0.0033 |
+| **Ganho sobre o baseline** | **+13 pts** | **0,0 pt** |
+| AUC | `0.9771` ± 0.0003 | `0.7302` ± 0.0015 |
+| Recall no limiar `0.5` | `0.7190` ± 0.0323 | `0.4028` ± 0.0065 |
+| Custo no limiar `0.5` | `59.0` ± 6.8 | `193.2` ± 1.8 |
+| Custo no limiar escolhido | `18.4` ± 0.7 | `106.6` ± 0.5 |
 
 Duas linhas resumem a diferença entre um laboratório e um problema real.
 
-O **ganho sobre o baseline é negativo.** Nesta divisão, o modelo treinado no German Credit acerta `0.7116` contra `0.7150` de quem chuta "bom pagador" para todos os 200 clientes do teste, sem olhar coluna nenhuma. Três décimos de ponto **abaixo** de não fazer nada. E o **recall no limiar `0.5`** cai de `0.70` para `0.40`: o corte herdado deixa passar seis em cada dez maus pagadores.
+O **ganho sobre o baseline é zero.** Nesta divisão, o modelo treinado no German Credit acerta `0.7148` contra `0.7150` de quem chuta "bom pagador" para todos os 200 clientes do teste, sem olhar coluna nenhuma. Um empate, dentro de qualquer margem que se queira aplicar. E o **recall no limiar `0.5`** cai de `0.72` para `0.40`: o corte herdado deixa passar seis em cada dez maus pagadores.
 
-Um relatório que parasse na acurácia concluiria que o modelo é inútil — e estaria errado. A **AUC de `0.7356`** diz o contrário: ele *ordena* os clientes bem acima do acaso, e o que falta não é sinal, é **régua**. No limiar escolhido, o mesmo modelo, sem retreinar, derruba o custo de `193.3` para `103.8`.
+Um relatório que parasse na acurácia concluiria que o modelo é inútil — e estaria errado. A **AUC de `0.7302`** diz o contrário: ele *ordena* os clientes bem acima do acaso, e o que falta não é sinal, é **régua**. No limiar escolhido, o mesmo modelo, sem retreinar, derruba o custo de `193.2` para `106.6`.
 
-Este é o resultado mais útil do projeto inteiro, e ele precisou de três seções anteriores para ser dizível: **acurácia abaixo do baseline e AUC de `0.74` ao mesmo tempo**. Um número diz "não aprendeu nada", o outro diz "aprendeu, e o corte é que está no lugar errado". Só o segundo está certo — e nenhuma das duas conclusões seria visível sem a outra métrica ao lado.
+Este é o resultado mais útil do projeto inteiro, e ele precisou de três seções anteriores para ser dizível: **acurácia empatada com o baseline e AUC de `0.73` ao mesmo tempo**. Um número diz "não aprendeu nada", o outro diz "aprendeu, e o corte é que está no lugar errado". Só o segundo está certo — e nenhuma das duas conclusões seria visível sem a outra métrica ao lado.
 
 O dataset sintético não estava errado — ele estava **fácil**, e continua sendo o mais fácil dos dois mesmo depois do [ruído injetado](#-geração-dos-dados-sintéticos). A diferença é que agora dá para dizer *quanto* mais fácil, e por quê: no sintético o ruído é conhecido e limitado a 2 pontos irredutíveis; no German Credit ninguém sabe onde fica o teto.
 
@@ -838,23 +872,23 @@ Os números acima descrevem **a divisão que o projeto fixa** (semente `42`). Va
 
 | | Sintético | German Credit |
 | --- | ---: | ---: |
-| Baseline médio | `0.8531` ± 0.0040 | `0.6910` ± 0.0072 |
-| Acurácia média | `0.9433` ± 0.0063 | `0.7433` ± 0.0076 |
-| Pior / melhor divisão | `0.9000` / `0.9750` | `0.6750` / `0.7850` |
-| AUC média | `0.9705` ± 0.0038 | `0.7693` ± 0.0072 |
-| Pior / melhor divisão | `0.9397` / `0.9926` | `0.7089` / `0.8242` |
+| Baseline médio | `0.8431` ± 0.0078 | `0.7027` ± 0.0080 |
+| Acurácia média | `0.9392` ± 0.0063 | `0.7420` ± 0.0050 |
+| Pior / melhor divisão | `0.9000` / `0.9792` | `0.7000` / `0.7700` |
+| AUC média | `0.9604` ± 0.0036 | `0.7721` ± 0.0064 |
+| Pior / melhor divisão | `0.9290` / `0.9816` | `0.7216` / `0.8055` |
 
 Três coisas ficam claras de uma vez:
 
-**A divisão importa mais que a inicialização.** A AUC do German Credit vai de `0.71` a `0.82` conforme o sorteio — onze pontos de amplitude, contra `± 0.0025` entre inicializações de peso na mesma divisão. O acaso do corte domina o acaso do treino por uma ordem de grandeza.
+**A divisão importa mais que a inicialização.** A AUC do German Credit vai de `0.72` a `0.81` conforme o sorteio — oito pontos de amplitude, contra `± 0.0015` entre inicializações de peso na mesma divisão. O acaso do corte domina o acaso do treino por uma ordem de grandeza.
 
-**Até o baseline se move.** Ele varia de `0.6550` a `0.7300` entre divisões, porque a proporção de maus pagadores que cai no conjunto de teste muda a cada sorteio. Quando a própria régua oscila 7 pontos, comparar acurácias de uma execução só não significa nada.
+**Até o baseline se move.** Ele varia de `0.6500` a `0.7600` entre divisões, porque a proporção de maus pagadores que cai no conjunto de teste muda a cada sorteio. Quando a própria régua oscila 11 pontos, comparar acurácias de uma execução só não significa nada.
 
-**A semente `42` calhou de ser ruim.** Na média das divisões o modelo real acerta `0.7433` contra `0.6910` de baseline — um ganho real de 5 pontos. Na divisão que o projeto fixa, esse ganho some e fica levemente negativo. **Os dois números estão certos**; eles respondem perguntas diferentes: "o que esperar de uma divisão qualquer?" e "o que esta divisão dá?".
+**A semente `42` calhou de ser ruim.** Na média das divisões o modelo real acerta `0.7420` contra `0.7027` de baseline — um ganho real de 4 pontos. Na divisão que o projeto fixa, esse ganho some por completo. **Os dois números estão certos**; eles respondem perguntas diferentes: "o que esperar de uma divisão qualquer?" e "o que esta divisão dá?".
 
 Isso é um resultado sobre o **tamanho do dataset**, não sobre o modelo: 200 linhas de teste, das quais ~60 são positivas, não sustentam três casas decimais. É o argumento concreto para os dois itens que faltam na lista de evoluções — **validação cruzada** e **split estratificado** —, que existem exatamente para trocar "a estimativa de um sorteio" pela "média de vários".
 
-E é por isso que a semente continua fixa. Sabendo que existe uma divisão que dá `0.7850`, a tentação de procurá-la é real; uma semente congelada no código é a defesa mais barata contra escolher o resultado depois de ver os resultados.
+E é por isso que a semente continua fixa. Sabendo que existe uma divisão que dá `0.7700`, a tentação de procurá-la é real; uma semente congelada no código é a defesa mais barata contra escolher o resultado depois de ver os resultados.
 
 ### Reprodutibilidade
 
@@ -892,45 +926,68 @@ Uma **MLP** com duas camadas ocultas:
 flowchart LR
     I(["Entrada<br/>57 features (real)<br/>4 (sintético)"])
     H1["Dense 16 · ReLU<br/>928 parâmetros"]
+    D1["Dropout 0.2<br/>0 parâmetros"]
     H2["Dense 8 · ReLU<br/>136 parâmetros"]
+    D2["Dropout 0.2<br/>0 parâmetros"]
     O["Dense 1 · Sigmoid<br/>9 parâmetros"]
     P(["Probabilidade<br/>0 a 1"])
 
     I -->|"combinações<br/>das features"| H1
-    H1 -->|"combinação<br/>dos padrões"| H2
-    H2 -->|"achatamento<br/>para 0–1"| O
+    H1 --> D1
+    D1 -->|"combinação<br/>dos padrões"| H2
+    H2 --> D2
+    D2 -->|"achatamento<br/>para 0–1"| O
     O --> P
 
     classDef io     fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
     classDef hidden fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,color:#1e293b
+    classDef reg    fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
     classDef out    fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class I,P io
     class H1,H2 hidden
+    class D1,D2 reg
     class O out
 ```
 
+As duas camadas em âmbar **não têm peso nenhum** e só existem durante o treino — o que elas fazem, e por que a contagem de parâmetros não muda por causa delas, está em [Regularização](#-regularização-l2-e-dropout).
+
 Total: **1.073 parâmetros treináveis** no dataset real com one-hot (**465** na variante ordinal, **225** no sintético) — é o que o `model.summary()` imprime ao rodar.
 
-> ⚠️ São 1.073 parâmetros para **640 linhas** de treino efetivo. Essa razão é desconfortável e aparece na [medição](#one-hot-melhorou-o-modelo-não): a capacidade extra vai para decorar, não para generalizar. É o argumento mais concreto a favor do próximo item da lista — regularização.
+> ⚠️ São 1.073 parâmetros para **640 linhas** de treino efetivo. Essa razão é desconfortável, e é o que motivou o item de [regularização](#-regularização-l2-e-dropout) — cuja medição, adiante, chega a uma conclusão menos confortável ainda.
 
 A largura da entrada é o **único** ponto da rede que depende do dataset:
 
 ```javascript
-const buildModel = (inputSize = 4) => {
+const buildModel = (inputSize = 4, options = {}) => {
+  const { l2 = L2_LAMBDA, dropout = DROPOUT_RATE } = options;
   const model = tf.sequential();
 
-  model.add(tf.layers.dense({ inputShape: [inputSize], units: 16, activation: 'relu' }));
-  model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
-  model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+  const addHidden = (units, shape = {}) => {
+    model.add(tf.layers.dense({
+      ...shape,
+      units,
+      activation: 'relu',
+      kernelRegularizer: createRegularizer(l2),
+    }));
 
-  model.compile({
-    optimizer: tf.train.adam(0.001),
-    loss: 'binaryCrossentropy',
-    metrics: ['accuracy'],
-  });
+    if (dropout > 0) {
+      model.add(tf.layers.dropout({ rate: dropout }));
+    }
+  };
 
-  return model;
+  addHidden(16, { inputShape: [inputSize] });
+  addHidden(8);
+
+  // A saída não leva dropout: descartar a única unidade que produz a
+  // resposta não removeria um caminho redundante — apagaria a predição.
+  model.add(tf.layers.dense({
+    units: 1,
+    activation: 'sigmoid',
+    kernelRegularizer: createRegularizer(l2),
+  }));
+
+  return compileModel(model);
 };
 ```
 
@@ -939,12 +996,195 @@ const buildModel = (inputSize = 4) => {
 | **ReLU**      | Introduz não-linearidade barata e evita o desaparecimento de gradiente das camadas ocultas |
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
 | **16 → 8**    | Funil: capacidade suficiente para o padrão, pequena o bastante para não decorar o dataset  |
+| **L2 + dropout** | Os dois freios contra decorar, [medidos em uma grade de 30 combinações](#-regularização-l2-e-dropout) |
 
 ```javascript
-const model = buildModel(source.featureNames.length);   // 4, 19 ou 57
+const model = buildModel(source.featureNames.length, { l2, dropout });   // 4, 19 ou 57
 ```
 
 O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução.
+
+---
+
+## 🛡️ Regularização: L2 e dropout
+
+O modelo real tem **1.073 parâmetros para 640 linhas** de treino efetivo. Com mais parâmetros do que exemplos, decorar é o caminho mais barato para baixar o erro — e a conta chega no teste, não no treino.
+
+Isso não é uma suspeita: dá para medir. Cada execução agora imprime as duas acurácias e a distância entre elas — abaixo, uma rodada de `node index.js --l2=0 --dropout=0`, que é a rede como ela era antes deste item:
+
+```text
+Train accuracy: 0.8000
+Test accuracy: 0.7100
+Diferença treino − teste: 0.0900
+```
+
+O modelo vai **9 pontos melhor no que já viu**. Essa diferença é o termômetro do *overfitting*, e é o número que os dois freios deste item existem para encolher.
+
+### Os dois freios
+
+| Freio       | O que faz                                            | Como                                                     |
+| ----------- | ---------------------------------------------------- | -------------------------------------------------------- |
+| **L2**      | Encarece pesos grandes                                | Soma `λ·Σw²` à loss do treino — o peso só sobrevive se render redução de erro suficiente para pagar a multa |
+| **Dropout** | Impede que uma unidade dependa de uma vizinha específica | Desliga uma fração das unidades ocultas a cada passo, forçando a informação a ficar distribuída |
+
+São ataques diferentes ao mesmo problema. O L2 **achata** os pesos de forma contínua, sem zerar nenhum; o dropout **quebra** as dependências entre unidades, sem tocar na magnitude.
+
+```javascript
+const createRegularizer = (l2 = L2_LAMBDA) =>
+  (l2 > 0 ? tf.regularizers.l2({ l2 }) : null);
+```
+
+Três detalhes de implementação que mudam como o resto do projeto se lê:
+
+1. **Dropout não tem parâmetro nenhum.** O `model.summary()` continua fechando em `1073`. Ele não acrescenta capacidade — só tira capacidade de uso durante o treino.
+
+2. **Dropout está desligado na inferência.** `predict` e `evaluate` rodam em modo de avaliação, então duas predições do mesmo cliente dão o mesmo número. É por isso que a acurácia que o `fit` imprime época a época é **pessimista**: ela é medida com as unidades caindo. As duas acurácias que o `main` compara vêm ambas de `evaluate`, com o dropout desligado nas duas — é a comparação justa.
+
+3. **No tfjs, a penalidade L2 entra na loss do treino, mas não na `val_loss` nem no `evaluate`.** Medido, não suposto: com os *mesmos pesos*, `evaluate` devolve exatamente a mesma loss com e sem regularizador. Duas consequências boas — o `Test loss` impresso continua sendo binary cross-entropy pura, comparável com o de antes deste item; e o [early stopping](#-early-stopping) continua monitorando generalização, não a multa.
+
+A saída não leva dropout. Descartar a única unidade que produz a resposta não removeria um caminho redundante — apagaria a predição.
+
+### A grade inteira
+
+Os valores não vieram de convenção. Foram medidos: **6 valores de λ × 5 taxas de dropout**, 15 divisões cada, 450 treinos.
+
+Primeiro a diferença treino − teste, que é o alvo declarado:
+
+```text
+diferença treino − teste          dropout
+      λ    |   0.0     0.1     0.2     0.3     0.5
+-----------+------------------------------------------
+  0        | 0.0598  0.0541  0.0623  0.0523  0.0135
+  0.0003   | 0.0627  0.0617  0.0659  0.0626  0.0255
+  0.001    | 0.0641  0.0612  0.0584  0.0557  0.0249
+  0.003    | 0.0575  0.0506  0.0460  0.0438  0.0198
+  0.01     | 0.0359  0.0370  0.0339  0.0220  0.0057
+  0.03     | 0.0045 -0.0031 -0.0033 -0.0033 -0.0033
+```
+
+**Funciona exatamente como a teoria promete.** A diferença cai monotonicamente descendo a tabela (mais L2) e andando para a direita (mais dropout), e no canto inferior direito ela some — o modelo passa a ir *igual* nos dois conjuntos.
+
+Agora a AUC, que é a métrica que mede se o modelo presta:
+
+```text
+AUC (erro padrão típico: ±0.0068)   dropout
+      λ    |   0.0     0.1     0.2     0.3     0.5
+-----------+------------------------------------------
+  0        | 0.7714  0.7742  0.7695  0.7716  0.7669
+  0.0003   | 0.7674  0.7669  0.7678  0.7736  0.7687
+  0.001    | 0.7714  0.7746  0.7738  0.7700  0.7744
+  0.003    | 0.7737  0.7740  0.7758  0.7738  0.7723
+  0.01     | 0.7743  0.7737  0.7713  0.7704  0.7715
+  0.03     | 0.7679  0.7679  0.7687  0.7673  0.7632
+```
+
+**Nada acontece.** A grade inteira cabe entre `0.7632` e `0.7758` — uma faixa de `0.013`, menos de dois erros padrão. Trinta configurações, da rede solta à rede estrangulada, e nenhuma se distingue de nenhuma.
+
+As duas tabelas juntas são o resultado deste item: **os freios encolheram a diferença de 0.0598 para quase zero sem mover a AUC um milímetro.**
+
+### Por que `0.003` e `0.2`
+
+Escolher a célula com a maior AUC de uma grade de 30 seria escolher ruído — a diferença entre a melhor e a pior não sobrevive ao erro padrão, e o "melhor" mudaria com outras 15 sementes. O critério honesto é o objetivo declarado do item: **encolher a diferença sem pagar por isso em outro lugar**.
+
+| Configuração | Treino | Teste | Diferença | AUC | Custo mínimo |
+| ------------ | -----: | ----: | --------: | --: | -----------: |
+| `λ=0`, `drop=0` — sem freio | `0.8065` | `0.7467` | `0.0598` | `0.7714` | `101.5` |
+| `λ=0`, `drop=0.2` — só dropout | `0.8016` | `0.7393` | `0.0623` | `0.7695` | `99.9` |
+| `λ=0.003`, `drop=0` — só L2 | `0.7958` | `0.7383` | `0.0575` | `0.7737` | `100.7` |
+| **`λ=0.003`, `drop=0.2` — o padrão** | `0.7897` | `0.7437` | **`0.0460`** | `0.7758` | `98.5` |
+| `λ=0.03`, `drop=0.3` — exagero | `0.6993` | `0.7027` | `-0.0033` | `0.7673` | `96.7` |
+
+O padrão escolhido corta a diferença em **23%** com acurácia e AUC indistinguíveis das de antes. Não é uma vitória; é a ausência de uma derrota, que era o máximo disponível.
+
+E repare na última linha, porque ela é o melhor achado da tabela.
+
+### Quando o modelo desiste e mesmo assim melhora
+
+Com `λ = 0.03` a rede é esmagada: a diferença treino − teste vira zero, e a acurácia cai para `0.7027` — praticamente o piso da classe majoritária (`0.6910` nessas 15 divisões). No limiar `0.5` esse modelo **não marca ninguém como inadimplente**. Como classificador, ele desistiu.
+
+E o **custo mínimo dele é o melhor da grade inteira**: `96.7` contra `101.5` da rede sem freio.
+
+Não é figura de linguagem — foi conferido em cinco divisões:
+
+```text
+λ = 0     | marcados ALTO em 200 clientes: 43, 34, 35, 53, 39 | probabilidades 0.0042..0.8445 | AUC 0.7601
+λ = 0.03  | marcados ALTO em 200 clientes:  0,  0,  0,  0,  0 | probabilidades 0.1338..0.4434 | AUC 0.7662
+```
+
+Não há contradição. As probabilidades foram todas comprimidas para perto da taxa base e nenhuma cruza `0.5` — mas a **ordem** entre elas sobreviveu intacta, e a AUC diz isso (aliás, ligeiramente *maior* que a do modelo solto). Um modelo que ordena bem e nunca cruza o limiar não é um modelo inútil: é um modelo com o corte no lugar errado, e [o corte é ajustável](#-ajuste-do-limiar-de-decisão).
+
+É a mesma lição que a [matriz de confusão](#-matriz-de-confusão), a [ROC](#-curva-roc-e-auc) e o [desbalanceamento](#o-que-cada-botão-fez-com-as-métricas) já tinham ensinado, agora por um quarto caminho independente: **acurácia e capacidade de ordenar são coisas diferentes, e só uma delas paga a conta.**
+
+### Cada dataset pede uma dose diferente
+
+Se a mesma configuração ajuda um dataset e atrapalha outro, ela não é uma constante do laboratório — é uma propriedade da **fonte**. E as três fontes do projeto formam uma escala limpa:
+
+| Fonte | Parâmetros | Linhas de treino | Razão | Diferença sem freio | Com freio | `\|w\|` médio sem → com |
+| ----- | ---------: | ---------------: | ----: | ------------------: | --------: | ---------------------: |
+| sintético  |   `225` | `768` | `0,3` | `0.0067` | `0.0078` | `0.3517` → `0.1954` |
+| ordinal    |   `465` | `640` | `0,7` | `0.0224` | `0.0123` | `0.2161` → `0.1152` |
+| one-hot    | `1.073` | `640` | `1,7` | `0.0707` | `0.0441` | `0.1572` → `0.0817` |
+
+*(a coluna "com freio" aplica `λ = 0.003` e `dropout = 0.2` nas três fontes, para que a comparação seja da mesma dose. É o que as duas fontes do German passaram a usar; o sintético ficou com os freios desligados justamente por causa desta tabela.)*
+
+O *overfitting* cresce com a razão parâmetros/linhas — `0.0067`, `0.0224`, `0.0707` — exatamente como se espera. E o L2 corta a magnitude média dos pesos **pela metade** nos três casos: o mecanismo é o mesmo, o que muda é haver ou não algo para ele corrigir.
+
+Por isso a regularização passou a ser declarada pela fonte, ao lado de tudo mais que muda de um dataset para o outro:
+
+```javascript
+const SYNTHETIC_SOURCE = {
+  // ...
+  // 225 parâmetros para 768 linhas: a capacidade já cabe no dado.
+  regularization: { l2: 0, dropout: 0 },
+};
+```
+
+A linha de comando continua tendo a última palavra — `--l2=` e `--dropout=` sobrescrevem o que a fonte declara, e o que não for passado fica como está:
+
+```javascript
+const { l2, dropout } = { ...source.regularization, ...overrides };
+```
+
+Ligar os freios do dataset real no sintético é um comando: `npm run start:synthetic -- --l2=0.003 --dropout=0.2`. A tabela acima diz o que vai acontecer.
+
+### O que a regularização não conserta
+
+Encolher a diferença treino − teste não trouxe generalização nenhuma. Vale entender por quê, porque o motivo é mais interessante que o resultado.
+
+1. **O early stopping já estava fazendo o trabalho.** Ele entrou no projeto muito antes deste item e é, ele próprio, um regularizador: interrompe o treino no momento em que a `val_loss` para de melhorar, ou seja, exatamente quando decorar começaria a valer a pena. L2 e dropout chegaram para frear um carro que já estava freando.
+
+2. **O teto é do dado, não do modelo.** A AUC de ~`0.78` é o que a literatura reporta para o German Credit com praticamente qualquer método. Nem [codificação correta](#one-hot-melhorou-o-modelo-não), nem 11 colunas a mais, nem agora regularização moveram esse número — três tentativas independentes esbarrando no mesmo limite. A conclusão é sobre o dataset.
+
+3. **Overfitting é um diagnóstico, não uma condenação.** A diferença de 7 pontos (`0.0707` na média de 15 divisões) era real e mensurável. Ela simplesmente não estava *custando* nada de mensurável no teste — o que a rede decorou a mais não estava atrapalhando o que ela tinha aprendido.
+
+Mas os freios funcionam, e dá para provar sem depender do dataset. Basta dar a eles um caso onde há de fato o que frear:
+
+Uma rede propositalmente grande demais — `128 → 64`, **15.745 parâmetros** para as mesmas 640 linhas:
+
+| `128 → 64`             | Épocas | Treino   | Teste    | Diferença | AUC      |
+| ---------------------- | -----: | -------: | -------: | --------: | -------: |
+| sem freio              | `11.1` | `0.8447` | `0.7450` | `0.0997`  | `0.7702` |
+| só L2 (`0.003`)        | `15.2` | `0.8343` | `0.7467` | `0.0877`  | `0.7727` |
+| só dropout (`0.2`)     | `12.1` | `0.8310` | `0.7437` | `0.0873`  | `0.7720` |
+| os dois                | `16.0` | `0.8143` | `0.7483` | `0.0659`  | `0.7753` |
+| os dois, forte         | `22.4` | `0.7818` | `0.7433` | `0.0385`  | `0.7751` |
+
+A diferença cai de `0.0997` para `0.0385` — os freios funcionam, e cada um sozinho já morde. Repare também na coluna de épocas: sem freio o early stopping desiste na **11ª** época; com os freios fortes o treino segue até a **22ª**, porque demora mais para a `val_loss` parar de melhorar.
+
+E a AUC continua parada em `0.77`. Uma rede com **quinze vezes** mais parâmetros, com e sem regularização, chega ao mesmo lugar.
+
+E no dataset **sintético**, onde a capacidade já cabe no dado, aplicar os mesmos freios **cobra**:
+
+| Sintético, 225 parâmetros | Diferença | AUC | Custo mínimo |
+| ------------------------- | --------: | --: | -----------: |
+| sem freio                 | `0.0067` | `0.9635` ± 0.0027 | `27.5` ± 2.2 |
+| com os freios do real     | `0.0078` | `0.9567` ± 0.0031 | `33.2` ± 2.8 |
+
+Não havia o que frear — a diferença já era indistinguível de zero — e frear derrubou a AUC em dois erros padrão e subiu o custo mínimo em **21%**. É por isso que a fonte sintética declara os freios desligados.
+
+Três desfechos diferentes, todos coerentes com a mesma explicação: **regularização paga onde há capacidade sobrando, e cobra onde não há.** O German Credit com 1.073 parâmetros fica no meio-termo desconfortável em que ela não faz mal nem faz bem.
+
+> 🔬 Para reproduzir: `node index.js --l2=0 --dropout=0` desliga os dois freios e devolve exatamente a rede de antes deste item. A diferença treino − teste que o programa imprime volta a abrir.
 
 ---
 
@@ -977,12 +1217,16 @@ await model.fit(xTrain, yTrain, {
 | **Batch size**       | 32                     | Exemplos processados antes de cada atualização de pesos           |
 | **Validation split** | 20% do treino          | Fatia usada só para medir generalização durante o treino          |
 | **Shuffle**          | `true`                 | Embaralha a cada época, evitando que a ordem vire um viés         |
+| **L2**               | `λ = 0.003`            | Soma `λ·Σw²` à loss do treino: peso grande passa a custar caro     |
+| **Dropout**          | `0.2`                  | Desliga 20% das unidades ocultas a cada passo — só durante o treino |
 
 ### ⏹️ Early Stopping
 
 O treino monitora a `val_loss` e **para sozinho** se ela não melhorar por 5 épocas seguidas (`patience: 5`) — ou seja, raramente chega às 40 épocas.
 
 É a defesa contra **overfitting**: o momento em que o modelo continua melhorando no treino enquanto piora na validação, porque passou a decorar exemplos em vez de aprender o padrão.
+
+E é a **primeira** das três defesas do projeto, não a única — as outras duas são [L2 e dropout](#-regularização-l2-e-dropout). Vale registrar que ela já estava aqui antes delas, porque isso muda o que as outras duas ainda tinham para ganhar.
 
 ---
 
@@ -1439,7 +1683,9 @@ O `index.js` só executa o treino quando chamado direto (`node index.js`); ao se
 
 ```javascript
 if (require.main === module) {
-  const run = async () => main(resolveSourceId(process.argv.slice(2)));
+  const argv = process.argv.slice(2);
+  const run = async () =>
+    main(resolveSourceId(argv), resolveRegularization(argv));
 
   run().catch((error) => {
     console.error(`\n${error.message}\n`);
@@ -1498,11 +1744,14 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `applyMinMaxScaler` | função | Scaler + cliente → vetor normalizado |
 | `SYNTHETIC_SOURCE`, `GERMAN_SOURCE`, `GERMAN_ORDINAL_SOURCE`, `SOURCES` | objetos | As três fontes de dados e o registro delas |
 | `DEFAULT_SOURCE_ID`, `resolveSourceId` | constante / função | Fonte padrão e leitura de `--source=` |
+| `L2_LAMBDA`, `DROPOUT_RATE` | constantes | Intensidade padrão dos dois freios contra overfitting |
+| `parseNumericFlag`, `resolveRegularization` | funções | Leitura validada de `--l2=` e `--dropout=`; devolve só o que foi pedido, para a fonte manter o resto |
 | `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
 | `splitCustomers` | função | Divide clientes **brutos** em treino e teste |
 | `majorityBaseline` | função | Piso da acurácia: sempre chutar a classe majoritária |
 | `compileModel` | função | Aplica optimizer, loss e métricas a um modelo |
-| `buildModel` | função | Monta e compila a MLP com o número de entradas da fonte |
+| `createRegularizer` | função | Devolve a penalidade L2 da camada, ou `null` quando `λ = 0` |
+| `buildModel` | função | Monta e compila a MLP com o número de entradas da fonte e os dois freios |
 | `saveModel` | função async | Salva o modelo em `file://<dir>` com o otimizador |
 | `loadModel` | função async | Carrega de `model.json` e garante que vem compilado |
 | `predictRisk` | função | Cliente bruto → probabilidade, já liberando os tensores |
@@ -1530,68 +1779,76 @@ Fonte: German Credit — UCI/Statlog (Hofmann, 1994), one-hot
 Arquivo: /caminho/do/projeto/data/german-credit.csv
 Clientes lidos: 1000
 Features: durationMonths, creditAmount, installmentRate, ..., foreignWorker=A201, foreignWorker=A202
+Regularização: L2 = 0.003, dropout = 0.2
 
+dense_Dense1 (Dense)        [[null,57]]               [null,16]                 928
+dropout_Dropout1 (Dropout)  [[null,16]]               [null,16]                 0
+dense_Dense2 (Dense)        [[null,16]]               [null,8]                  136
+dropout_Dropout2 (Dropout)  [[null,8]]                [null,8]                  0
+dense_Dense3 (Dense)        [[null,8]]                [null,1]                  9
 Total params: 1073
 
-Test loss: 0.5230
-Test accuracy: 0.7400
+Test loss: 0.5255
+Train accuracy: 0.8050
+Test accuracy: 0.7150
 Baseline (classe majoritária): 0.7150
+Diferença treino − teste: 0.0900
 
 Matriz de confusão (limiar 0.5):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
 Real BAIXO |      121 (TN) |      22 (FP)
-Real ALTO  |       30 (FN) |      27 (TP)
+Real ALTO  |       35 (FN) |      22 (TP)
 
-Precision: 0.5510 - dos marcados como ALTO RISCO, quantos eram
-Recall:    0.4737 - dos que eram ALTO RISCO, quantos foram pegos
-F1-score:  0.5094 - média harmônica entre precision e recall
+Precision: 0.5000 - dos marcados como ALTO RISCO, quantos eram
+Recall:    0.3860 - dos que eram ALTO RISCO, quantos foram pegos
+F1-score:  0.4356 - média harmônica entre precision e recall
 
 Curva ROC (O = limiar 0.5, . = aleatório):
     TPR
-1.0 |                            ************|
-    |                   *********     ...    |
-    |              *****           ...       |
-    |           ***             ...          |
-    |          *            ....             |
-    |        **          ...                 |
-0.5 |     O**         ...                    |
-    |    *         ...                       |
-    |   *      ....                          |
+1.0 |                       *****************|
+    |                   ****          ...    |
+    |                ***           ...       |
+    |             ***           ...          |
+    |           **          ....             |
+    |          *         ...                 |
+0.5 |        **       ...                    |
+    |    **O*      ...                       |
+    |  **      ....                          |
     |       ...                              |
-    |  * ...                                 |
-    |**..                                    |
+    | *  ...                                 |
+    |*...                                    |
 0.0 +----------------------------------------+
     0.0                               FPR 1.0
-AUC: 0.7501
+AUC: 0.7404
 
 Ajuste do limiar (FP custa 1, FN custa 5):
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
-Padrão (0.5)   | 0.5000 | 0.1538 | 0.4737 | 22 | 30 |   172
-Youden (max J) | 0.2798 | 0.3427 | 0.7544 | 49 | 14 |   119
-Menor custo    | 0.1655 | 0.5035 | 0.8947 | 72 |  6 |   102
+Padrão (0.5)   | 0.5000 | 0.1538 | 0.3860 | 22 | 35 |   197
+Youden (max J) | 0.3138 | 0.3427 | 0.7368 | 49 | 15 |   124
+Menor custo    | 0.1421 | 0.5874 | 0.9298 | 84 |  4 |   104
 
-Matriz no limiar escolhido (0.1655):
+Matriz no limiar escolhido (0.1421):
            | Predito BAIXO | Predito ALTO
 -----------+---------------+-------------
-Real BAIXO |       71 (TN) |      72 (FP)
-Real ALTO  |        6 (FN) |      51 (TP)
+Real BAIXO |       59 (TN) |      84 (FP)
+Real ALTO  |        4 (FN) |      53 (TP)
 
 Auditoria por sexo (o modelo nunca recebeu esta coluna):
 Grupo    |   N | Inadimp. real | Marcados ALTO | FN não pegos
 ---------+-----+---------------+---------------+-------------
-Mulheres |  64 |         28.1% |         65.6% |        11.1%
-Homens   | 136 |         28.7% |         59.6% |        12.8%
+Mulheres |  64 |         28.1% |         75.0% |         0.0%
+Homens   | 136 |         28.7% |         65.4% |        10.3%
 
-Razão de aprovação (regra dos 4/5): 0.850
+Razão de aprovação (regra dos 4/5): 0.723  <- abaixo de 0.80
 
-Probabilidade de alto risco: 0.9503
+Probabilidade de alto risco: 0.7464
 Classificação: ALTO RISCO
 Modelo salvo em: /caminho/do/projeto/model
-Modelo recarregado — test loss: 0.5230
-Modelo recarregado — test accuracy: 0.7400
-Modelo recarregado — probabilidade: 0.9503
+Modelo recarregado — test loss: 0.5255
+Modelo recarregado — test accuracy: 0.7150
+Modelo recarregado — probabilidade: 0.7464
 Mesma predição do modelo original? sim
 ```
 
@@ -1612,7 +1869,7 @@ E duas coisas que **só aparecem no dataset real**, e que são o motivo de ele e
 - ⚠️ precision (`0.5510`) e recall (`0.4737`) ficam longe uma da outra → no corte `0.5` o modelo deixa passar mais da metade dos maus pagadores, e é por isso que [ajustar o limiar](#-ajuste-do-limiar-de-decisão) deixa de ser refinamento e vira necessidade;
 - ⚠️ a razão de aprovação entre os grupos fica perto de `0.80` → o modelo trata mulheres e homens de forma diferente [sem nunca ter recebido a coluna de sexo](#a-coluna-que-o-modelo-não-recebeu).
 
-No dataset sintético, os mesmos números ficam em `0.9477` de acurácia contra `0.8250` de baseline, com AUC `0.9756` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real. Note que **o alerta da acurácia vale para os dois**: com 15,8% de inadimplentes, `0.95` também são só 12 pontos acima de chutar sempre "bom pagador".
+No dataset sintético, os mesmos números ficam em `0.9508` de acurácia contra `0.8250` de baseline, com AUC `0.9771` — o [lado a lado completo](#comparação-lado-a-lado) está na seção do dataset real. Note que **o alerta da acurácia vale para os dois**: com 15,8% de inadimplentes, `0.95` também são só 13 pontos acima de chutar sempre "bom pagador".
 
 ---
 
@@ -1654,7 +1911,7 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 
 | Simplificação                                                  | Por que importaria em produção                              |
 | -------------------------------------------------------------- | ----------------------------------------------------------- |
-| **1.073 parâmetros para 640 linhas** de treino efetivo           | Capacidade muito acima do dado disponível; a [medição](#one-hot-melhorou-o-modelo-não) mostra o custo, e regularização é a correção |
+| **1.073 parâmetros para 640 linhas** de treino efetivo           | Capacidade muito acima do dado disponível. A [regularização](#-regularização-l2-e-dropout) corta a diferença treino−teste pela metade, mas **não** recupera AUC — o gargalo é o dado, não a capacidade |
 | Dataset real com apenas **1.000 linhas**                         | Pouco dado para uma rede neural — boa parte da variação entre execuções vem daí |
 | Todos os níveis one-hot mantidos (*dummy variable trap*)         | Inofensivo em rede neural, quebraria uma regressão linear |
 | `savingsStatus` trata "desconhecido" como mais um nível          | Ausência de dado não é uma categoria como as outras; o certo seria um indicador de faltante separado |
@@ -1664,7 +1921,8 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
 | Modelo salvo sem versionar o **scaler** junto                    | Pesos novos com pré-processamento antigo → training-serving skew |
 | Split simples em vez de **estratificado**                        | Com 30% de positivos no real e 15,8% no sintético, um sorteio ruim desequilibra o hold-out |
-| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande — [medida aqui](#uma-divisão-não-é-o-dataset): a AUC do dataset real varia `0.70`–`0.81` conforme o sorteio |
+| Sem validação cruzada                                            | Um único hold-out de 200 linhas dá uma estimativa com incerteza grande — [medida aqui](#uma-divisão-não-é-o-dataset): a AUC do dataset real varia `0.72`–`0.81` conforme o sorteio |
+| Regularização escolhida em uma grade medida no **mesmo** protocolo de avaliação | Trinta configurações comparadas sem conjunto de validação separado; o certo seria escolher em um conjunto e reportar em outro — o mesmo problema do [limiar](#-ajuste-do-limiar-de-decisão), duas linhas acima |
 | Nenhum tratamento para o **desbalanceamento** durante o treino   | O dataset agora tem 15,8% de positivos, mas o treino não usa `classWeight`, reamostragem nem *focal loss*; a única correção aplicada é [no limiar](#-ajuste-do-limiar-de-decisão), depois do fato |
 | Ruído sintético **normal e independente** por coluna             | Erro real é enviesado (renda é subdeclarada, não sorteada em torno da verdade) e correlacionado entre colunas |
 | Ruído de rótulo **simétrico**                                    | Na prática um mau pagador registrado como bom é bem mais comum que o contrário |
@@ -1678,6 +1936,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~Categorias codificadas como ordinais~~ | [One-hot](#por-que-one-hot-e-não-ordinal) nas 12 qualitativas |
 | ~~8 das 20 colunas aproveitadas~~ | 19 colunas; a vigésima é [auditoria, não feature](#a-coluna-que-o-modelo-não-recebeu) |
 | ~~Dataset sintético limpo e quase equilibrado~~ | [Ruído e desbalanceamento](#-geração-dos-dados-sintéticos) injetados, com o efeito de cada um medido |
+| ~~Nenhuma defesa contra overfitting além do early stopping~~ | [L2 e dropout](#-regularização-l2-e-dropout), com a dose declarada por fonte e medida em grade |
 | ~~CSV sintético gerado com `Math.random()`, irreprodutível~~ | Gerador com semente: `npm run seed` reconstrói o arquivo versionado byte a byte |
 
 ---
@@ -1695,7 +1954,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~usar um dataset real de crédito~~ — feito, veja [Dataset real: German Credit](#-dataset-real-german-credit);
 - [x] ~~codificar as categóricas com *one-hot* em vez de ordinal, e aproveitar as colunas restantes~~ — feito, veja [Por que one-hot e não ordinal](#por-que-one-hot-e-não-ordinal);
 - [x] ~~adicionar ruído e desbalanceamento aos dados sintéticos~~ — feito, veja [Geração dos dados sintéticos](#-geração-dos-dados-sintéticos);
-- [ ] **regularização L2 e dropout** — a [medição](#one-hot-melhorou-o-modelo-não) mostra que é o próximo passo natural;
+- [x] ~~regularização L2 e dropout~~ — feito, veja [Regularização: L2 e dropout](#-regularização-l2-e-dropout);
 - [ ] mitigar a disparidade medida, não só reportá-la;
 - [ ] validação cruzada e split estratificado;
 - [ ] comparar arquiteturas diferentes.
