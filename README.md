@@ -29,11 +29,17 @@ flowchart LR
     class H final
 ```
 
+## 🎬 Demonstração
+
+[![Três cenas do laboratório: a suíte, o treino completo e a API respondendo](docs/demo-poster.png)](docs/demo.mp4)
+
+**[▶️ Assistir ao vídeo](docs/demo.mp4)** — 68 segundos, três cenas, **saída real do terminal em todas**: os 394 testes; o `npm start` inteiro (leitura do CSV, topologia, 33 épocas até o *early stopping*, matriz de confusão, curva ROC, ajuste do limiar por custo e auditoria por sexo); e a API respondendo a três `curl` — alto risco, baixo risco e payload inválido.
+
 O laço entre **Treinamento** e **Validação** é o coração do processo: a cada época o modelo é medido em dados que não usou para ajustar pesos, e o *early stopping* corta o ciclo quando essa medida para de melhorar. **Teste**, **Persistência** e **Predição** acontecem uma única vez, depois que o treino terminou.
 
 > ⚠️ Finalidade **exclusivamente educacional**. O dataset real é de 1994 e serve de estudo, não de base para decisões financeiras.
 
-**Neste README:** [Documentação](#-documentação) · [Objetivo](#-objetivo) · [Início rápido](#-início-rápido) ([estrutura](#estrutura), [testes](#testes)) · [A API](#-a-api) · [Limitações conhecidas](#-limitações-conhecidas) · [Próximas evoluções](#-próximas-evoluções) · [Conceitos](#-conceitos-demonstrados) · [Aviso](#-aviso) · [Referências](#-referências)
+**Neste README:** [Demonstração](#-demonstração) · [Documentação](#-documentação) · [Objetivo](#-objetivo) · [Início rápido](#-início-rápido) ([estrutura](#estrutura), [testes](#testes)) · [A API](#-a-api) · [Limitações conhecidas](#-limitações-conhecidas) · [Próximas evoluções](#-próximas-evoluções) · [Conceitos](#-conceitos-demonstrados) · [Aviso](#-aviso) · [Referências](#-referências)
 
 ---
 
@@ -238,7 +244,9 @@ tfjs-credit-risk-classifier/
 │   ├── inferencia.md
 │   ├── servico.md
 │   ├── api.md
-│   └── testes.md
+│   ├── testes.md
+│   ├── demo.mp4           # o vídeo de demonstração, no topo deste README
+│   └── demo-poster.png    # a capa clicável do vídeo
 ├── package.json
 ├── package-lock.json
 ├── .nvmrc                 # versão do Node suportada
