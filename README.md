@@ -2,7 +2,7 @@
 
 Laboratório didático de classificação de risco de crédito com **Node.js**, **TensorFlow.js** e uma rede neural **MLP (Multilayer Perceptron)**.
 
-Todo o ciclo de um projeto de Machine Learning supervisionado cabe em um único arquivo de código (`index.js`), do dado bruto até a inferência — sobre um **dataset real de crédito** ou sobre um dataset sintético gerado aqui:
+Todo o ciclo de um projeto de Machine Learning supervisionado está aqui, do dado bruto até a inferência — sobre um **dataset real de crédito** ou sobre um dataset sintético gerado aqui. O código vive em `src/`, um módulo por seção, **numerados na ordem em que se leem**: `00-constants` → `18-main`. O `index.js` é só a porta de entrada.
 
 ```mermaid
 flowchart LR
@@ -10,7 +10,7 @@ flowchart LR
     B --> B2["📄 CSV<br/>dados brutos em disco"]
     B2 --> S["✂️ Split<br/>treino / teste"]
     S --> C["⚙️ Pré-processamento<br/>escala medida no treino"]
-    C --> D["🏋️ Treinamento<br/>MLP 8 → 16 → 8 → 1"]
+    C --> D["🏋️ Treinamento<br/>MLP 57 → 16 → 8 → 1"]
     D --> E{"📊 Validação<br/>val_loss melhorou?"}
     E -->|"sim — próxima época"| D
     E -->|"não há 5 épocas — early stopping"| F["🧪 Teste<br/>matriz, F1, AUC<br/>e ajuste do limiar"]
@@ -148,7 +148,31 @@ Os dados **não** mudam entre execuções, e agora nem entre máquinas: o CSV re
 
 ```text
 tfjs-credit-risk-classifier/
-├── index.js               # fontes de dados, modelo, treino, avaliação, persistência e predição
+├── index.js               # porta de entrada: lê os argumentos e reexporta o que `src/` define
+├── src/                   # um módulo por seção, numerados na ordem em que se leem
+│   ├── 00-constants.js    # faixas, sementes, limiar, doses de regularização, topologia
+│   ├── 01-preprocess.js   # normalização do sintético, vetor de features e `classify`
+│   ├── 02-synthetic.js    # PRNG com semente, ruído, desbalanceamento e geração dos clientes
+│   ├── 03-csv.js          # ida e volta do CSV: escrita com precisão por coluna e leitura
+│   ├── 04-german.js       # parse do arquivo bruto da UCI e conversão para clientes
+│   ├── 05-scaler.js       # min-max ajustado SÓ no treino
+│   ├── 06-encoding.js     # one-hot e ordinal das colunas qualitativas
+│   ├── 07-audit.js        # auditoria por sexo e mitigação por limiar de grupo
+│   ├── 08-sources.js      # as três fontes: sintética, German one-hot e German ordinal
+│   ├── 08a-cli.js         # leitura das flags (`--source`, `--cv`, `--units`, `--l2`, …)
+│   ├── 09-split.js        # embaralhamento, split estratificado e dobras
+│   ├── 10-model.js        # construção da MLP, regularizadores e configuração de treino
+│   ├── 11-persistence.js  # `model.save` e `tf.loadLayersModel`
+│   ├── 12-inference.js    # predição para um cliente novo
+│   ├── 13-confusion.js    # matriz de confusão
+│   ├── 13a-format.js      # tabelas de texto para o relatório
+│   ├── 14-metrics.js      # precision, recall e F1
+│   ├── 15-roc.js          # curva ROC e AUC
+│   ├── 16-threshold.js    # matriz de custo e escolha do limiar
+│   ├── 16a-evaluate.js    # baseline da classe majoritária e avaliação no teste
+│   ├── 17-cross-validation.js  # k dobras estratificadas, média e erro padrão
+│   ├── 17a-architectures.js    # comparação das oito topologias
+│   └── 18-main.js         # o fluxo completo de uma execução
 ├── scripts/
 │   ├── fetch-german.js    # baixa o German Credit da UCI e converte
 │   └── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
@@ -184,7 +208,7 @@ npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
 ```
 
-São **295 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
+São **317 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
 
 > ⛔ Se o `npm install` ou o `npm start` quebrarem, o culpado quase sempre é a versão do Node: veja [Solução de problemas](docs/testes.md#-solução-de-problemas).
 
