@@ -31,9 +31,15 @@ flowchart LR
 
 ## 🎬 Demonstração
 
-[![Três cenas do laboratório: a suíte, o treino completo e a API respondendo](docs/demo-poster.png)](docs/demo.mp4)
+![A página do fluxo: editar o prazo do contrato repontua o cliente na hora, e os três modos mostram a mesma rede decidindo, aprendendo e sendo medida](docs/demo.gif)
 
-**[▶️ Assistir ao vídeo](docs/demo.mp4)** — 68 segundos, três cenas, **saída real do terminal em todas**: os 394 testes; o `npm start` inteiro (leitura do CSV, topologia, 33 épocas até o *early stopping*, matriz de confusão, curva ROC, ajuste do limiar por custo e auditoria por sexo); e a API respondendo a três `curl` — alto risco, baixo risco e payload inválido.
+**A página consumindo a API deste repositório**, com o pacote que o `npm start` acabou de treinar — os números da tela são os mesmos que o terminal imprimiu. São três modos sobre a mesma rede:
+
+- **Análise** — o caminho do dado, dos 19 campos até a probabilidade. Os campos são editáveis: baixar o prazo de 48 para 6 meses repontua o cliente na hora, contra o limiar de 13,0% que veio da matriz de custo.
+- **Treinamento** — o laço que produziu os pesos, passo a passo, ao lado da curva real daquele treino: a perda de treino caindo, a de validação achatando e o ponto onde o *early stopping* cortou.
+- **Avaliação** — a acurácia ao lado do piso da classe majoritária, a matriz de confusão no limiar escolhido e a auditoria por sexo com a regra dos quatro quintos.
+
+**[▶️ Tour completo em vídeo (61s, 1280×800)](docs/demo.mp4)** — o mesmo passeio, sem cortes e em resolução maior.
 
 O laço entre **Treinamento** e **Validação** é o coração do processo: a cada época o modelo é medido em dados que não usou para ajustar pesos, e o *early stopping* corta o ciclo quando essa medida para de melhorar. **Teste**, **Persistência** e **Predição** acontecem uma única vez, depois que o treino terminou.
 
@@ -245,8 +251,8 @@ tfjs-credit-risk-classifier/
 │   ├── servico.md
 │   ├── api.md
 │   ├── testes.md
-│   ├── demo.mp4           # o vídeo de demonstração, no topo deste README
-│   └── demo-poster.png    # a capa clicável do vídeo
+│   ├── demo.gif           # o laço da página, no topo deste README
+│   └── demo.mp4           # o tour completo da página, em vídeo
 ├── package.json
 ├── package-lock.json
 ├── .nvmrc                 # versão do Node suportada
@@ -396,7 +402,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);
 - [x] ~~salvar e recarregar o modelo (`model.save` / `tf.loadLayersModel`)~~ — feito, veja [Persistência do modelo](docs/inferencia.md#-persistência-do-modelo);
 - [x] ~~API REST com endpoint `POST /risk-score`~~ — feito, veja [O serviço](docs/servico.md#-o-serviço-api-rest-pacote-servido-e-contrato-de-entrada);
-- [ ] frontend para simular clientes;
+- [x] ~~frontend para simular clientes~~ — feito, veja [a demonstração](#-demonstração);
 - [ ] inferência no navegador com TensorFlow.js;
 - [ ] autenticação e log estruturado das decisões servidas.
 
