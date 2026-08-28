@@ -1,0 +1,215 @@
+/* --------------------------------------------------
+   Tokens
+   --------------------------------------------------
+   Este projeto não tinha frontend, então não havia paleta para herdar —
+   mas havia uma identidade visual: os diagramas do README já usam sky
+   (#0284c7) para o caminho principal, slate para o corpo, amber para as
+   decisões e green para o desfecho. Os tokens abaixo formalizam essa
+   escolha em vez de inventar uma segunda.
+
+   Toda cor existe primeiro no `:root` claro. O bloco escuro REDEFINE os
+   mesmos nomes; nenhum token nasce dentro de uma media query, porque um
+   token que só existe no escuro é um token que falta no claro. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Escala neutra — slate, a mesma dos diagramas */
+  --slate-50: #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+  --slate-950: #020617;
+
+  /* Escala de acento — sky */
+  --sky-50: #f0f9ff;
+  --sky-100: #e0f2fe;
+  --sky-200: #bae6fd;
+  --sky-300: #7dd3fc;
+  --sky-400: #38bdf8;
+  --sky-500: #0ea5e9;
+  --sky-600: #0284c7;
+  --sky-700: #0369a1;
+  --sky-900: #0c4a6e;
+
+  --amber-100: #fef9c3;
+  --amber-500: #eab308;
+  --amber-600: #ca8a04;
+  --amber-900: #713f12;
+
+  --green-100: #dcfce7;
+  --green-500: #22c55e;
+  --green-600: #16a34a;
+  --green-900: #14532d;
+
+  /* --- Papéis semânticos: é isto que os componentes usam --- */
+  --color-bg: var(--slate-100);
+  --color-surface: #ffffff;
+  --color-surface-sunken: var(--slate-50);
+  --color-surface-hover: var(--slate-50);
+  --color-border: var(--slate-200);
+  --color-border-strong: var(--slate-300);
+
+  --color-text: var(--slate-800);
+  --color-text-muted: var(--slate-500);
+  --color-text-subtle: var(--slate-400);
+
+  --color-accent: var(--sky-600);
+  --color-accent-hover: var(--sky-700);
+  --color-accent-soft: var(--sky-100);
+  --color-accent-border: var(--sky-200);
+  --color-accent-text: var(--sky-900);
+  --color-on-accent: #ffffff;
+
+  --color-warn: var(--amber-600);
+  --color-warn-soft: var(--amber-100);
+  --color-warn-text: var(--amber-900);
+
+  --color-success: var(--green-600);
+  --color-success-soft: var(--green-100);
+  --color-success-text: var(--green-900);
+
+  /* A rede: nó, traço e o traço em destaque. Separados dos papéis acima
+     porque a visualização é a única parte da tela que precisa de uma
+     linha visível sobre o fundo E discreta ao mesmo tempo. */
+  --color-node-fill: var(--sky-50);
+  --color-node-border: var(--sky-500);
+  --color-node-glow: rgb(14 165 233 / 22%);
+  --color-link: var(--slate-300);
+  --color-link-active: var(--sky-500);
+  --color-link-muted: var(--slate-200);
+
+  /* --- Espaçamento: escala de 4px --- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  /* Sombra baixa e fria, para o card não descolar do fundo */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
+  --shadow-md: 0 1px 3px rgb(15 23 42 / 8%), 0 8px 24px -12px rgb(15 23 42 / 14%);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --tracking-wide: 0.06em;
+
+  --dur-fast: 120ms;
+  --dur-base: 260ms;
+  --dur-slow: 900ms;
+  --dur-flow: 3.2s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* O tema do sistema, salvo quando a pessoa escolheu o claro na mão. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: var(--slate-950);
+    --color-surface: var(--slate-900);
+    --color-surface-sunken: #0b1220;
+    --color-surface-hover: var(--slate-800);
+    --color-border: #1e293b;
+    --color-border-strong: #334155;
+
+    --color-text: var(--slate-100);
+    --color-text-muted: var(--slate-400);
+    --color-text-subtle: var(--slate-500);
+
+    --color-accent: var(--sky-400);
+    --color-accent-hover: var(--sky-300);
+    --color-accent-soft: rgb(2 132 199 / 16%);
+    --color-accent-border: rgb(56 189 248 / 32%);
+    --color-accent-text: var(--sky-200);
+    --color-on-accent: var(--slate-950);
+
+    --color-warn: var(--amber-500);
+    --color-warn-soft: rgb(234 179 8 / 14%);
+    --color-warn-text: #fde68a;
+
+    --color-success: var(--green-500);
+    --color-success-soft: rgb(34 197 94 / 14%);
+    --color-success-text: #bbf7d0;
+
+    --color-node-fill: rgb(56 189 248 / 10%);
+    --color-node-border: var(--sky-400);
+    --color-node-glow: rgb(56 189 248 / 26%);
+    --color-link: #334155;
+    --color-link-active: var(--sky-400);
+    --color-link-muted: #1e293b;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 1px 3px rgb(0 0 0 / 45%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+  }
+}
+
+/* A escolha explícita no botão vence a preferência do sistema — nos dois
+   sentidos, por isso o bloco escuro aparece duas vezes em vez de uma. */
+:root[data-theme="dark"] {
+  --color-bg: var(--slate-950);
+  --color-surface: var(--slate-900);
+  --color-surface-sunken: #0b1220;
+  --color-surface-hover: var(--slate-800);
+  --color-border: #1e293b;
+  --color-border-strong: #334155;
+
+  --color-text: var(--slate-100);
+  --color-text-muted: var(--slate-400);
+  --color-text-subtle: var(--slate-500);
+
+  --color-accent: var(--sky-400);
+  --color-accent-hover: var(--sky-300);
+  --color-accent-soft: rgb(2 132 199 / 16%);
+  --color-accent-border: rgb(56 189 248 / 32%);
+  --color-accent-text: var(--sky-200);
+  --color-on-accent: var(--slate-950);
+
+  --color-warn: var(--amber-500);
+  --color-warn-soft: rgb(234 179 8 / 14%);
+  --color-warn-text: #fde68a;
+
+  --color-success: var(--green-500);
+  --color-success-soft: rgb(34 197 94 / 14%);
+  --color-success-text: #bbf7d0;
+
+  --color-node-fill: rgb(56 189 248 / 10%);
+  --color-node-border: var(--sky-400);
+  --color-node-glow: rgb(56 189 248 / 26%);
+  --color-link: #334155;
+  --color-link-active: var(--sky-400);
+  --color-link-muted: #1e293b;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 45%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+}

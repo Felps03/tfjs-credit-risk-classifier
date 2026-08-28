@@ -148,6 +148,8 @@ npm run serve                      # http://localhost:3000
 npm run serve -- --port=8080
 ```
 
+O mesmo endereço abre uma **página** que mostra o caminho do dado — os campos que entraram, as etapas que os relacionaram e a probabilidade que saiu. Os 19 campos são **editáveis**: mudar a conta corrente de "saldo negativo" para "200 DM ou mais" repontua o cliente e move as barras na hora. Ela consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
+
 ```bash
 curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
   "durationMonths": 48, "creditAmount": 9000, "installmentRate": 4,
@@ -200,7 +202,12 @@ tfjs-credit-risk-classifier/
 │   ├── 18-main.js         # o fluxo completo de uma execução
 │   ├── 19-artifacts.js    # o pacote servido: pesos + scaler + limiar + contrato
 │   ├── 20-contract.js     # validação do payload que chega pela API
-│   └── 21-api.js          # o servidor `node:http` e as três rotas
+│   ├── 21-api.js          # o servidor `node:http` e as três rotas
+│   └── 22-web.js          # os arquivos da página, servidos pelo mesmo processo
+├── web/                   # a página do fluxo: sem build, sem dependência
+│   ├── index.html
+│   ├── styles/            # tokens (cores, espaçamento, tema claro/escuro) e layout
+│   └── js/                # api → mappers → componentes (custom elements)
 ├── scripts/
 │   ├── fetch-german.js    # baixa o German Credit da UCI e converte
 │   ├── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
@@ -305,7 +312,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);
 - [x] ~~salvar e recarregar o modelo (`model.save` / `tf.loadLayersModel`)~~ — feito, veja [Persistência do modelo](docs/inferencia.md#-persistência-do-modelo);
 - [x] ~~API REST com endpoint `POST /risk-score`~~ — feito, veja [O serviço](docs/servico.md#-o-serviço-api-rest-pacote-servido-e-contrato-de-entrada);
-- [ ] frontend para simular clientes;
+- [x] ~~frontend para simular clientes~~ — feito, veja [A página do fluxo](docs/servico.md#-a-página-do-fluxo);
 - [ ] inferência no navegador com TensorFlow.js;
 - [ ] autenticação e log estruturado das decisões servidas.
 

@@ -133,6 +133,10 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `createRoutes`, `createApi`, `createRequestListener` | funções | As três rotas, o servidor `node:http` e o roteador com `404`/`405`/`500` |
 | `readJsonBody`, `isJsonRequest`, `sendJson` | funções | Corpo com teto de 16 KB, checagem de `content-type` e resposta JSON |
 | `listen` | função async | `server.listen` promisificado; devolve a porta **real** (importa com `--port=0`) |
+| `exampleCustomer` | função | Fonte → o cliente de demonstração **sem os campos recusados**, publicado no `GET /schema` |
+| `observedRange` | função | Metadados → `min`/`max` por coluna numérica, reconstruídos do scaler. **Informa, não valida**: fora da faixa continua sendo aceito |
+| `createWebHandler`, `readAsset`, `resolveAsset` | funções | Os arquivos da página em `web/`, com o `..` neutralizado antes de virar caminho; devolvem `null` para "não é meu", e é esse `null` que devolve a palavra ao `404` |
+| `contentType`, `withIndex`, `CONTENT_TYPES`, `WEB_DIR` | funções / constantes | Tipo por extensão, `/` → `index.html` e a pasta servida |
 | `API_PORT`, `API_BODY_LIMIT`, `resolvePort` | constantes / função | Porta padrão `3000`, teto do corpo e leitura de `--port=` |
 
 ---

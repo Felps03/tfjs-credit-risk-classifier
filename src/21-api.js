@@ -3,6 +3,7 @@ const http = require('node:http');
 const { API_BODY_LIMIT, API_PORT } = require('./00-constants');
 const { round } = require('./19-artifacts');
 const { describeSchema, validateCustomer } = require('./20-contract');
+const { createWebHandler } = require('./22-web');
 
 // --------------------------------------------------
 // 21. O serviço
@@ -68,6 +69,18 @@ const sendJson = (res, status, body, { close = false } = {}) => {
   res.end(payload);
 };
 
+// O irmão de `sendJson` para o que não é JSON: os arquivos da página.
+// Existe separado porque a única coisa que ele não pode fazer é assumir
+// o `content-type` — é justamente o que muda entre um `.html` e um `.js`.
+const sendAsset = (res, { status, type, body, headers = {} }) => {
+  res.writeHead(status, {
+    'content-type': type,
+    'content-length': body.length,
+    ...headers,
+  });
+  res.end(body);
+};
+
 // Lê o corpo com teto. Sem o teto, um POST grande o bastante derruba o
 // processo antes de qualquer validação rodar — a validação de esquema
 // não protege contra o que nunca chega a ser um objeto.
@@ -126,11 +139,23 @@ const readJsonBody = (req, limit = API_BODY_LIMIT) => new Promise((resolve) => {
 const isJsonRequest = (req) =>
   (req.headers['content-type'] ?? '').split(';')[0].trim() === 'application/json';
 
-const createRequestListener = (routes) => async (req, res) => {
+// O `fallback` é opcional de propósito: sem ele o roteador é exatamente
+// o que sempre foi, e é assim que os testes que só querem a API o montam.
+// Com ele, o pathname que não é rota vira uma tentativa de arquivo ANTES
+// do 404 — e não depois, porque um 404 já enviado não se desfaz.
+const createRequestListener = (routes, fallback = null) => async (req, res) => {
   const { pathname } = new URL(req.url, 'http://localhost');
   const route = routes[pathname];
 
   if (!route) {
+    const asset = fallback === null ? null : fallback(req, pathname);
+
+    if (asset !== null) {
+      sendAsset(res, asset);
+
+      return;
+    }
+
     sendJson(res, 404, {
       error: `Rota desconhecida: ${pathname}.`,
       routes: Object.entries(routes).map(([path, handlers]) =>
@@ -163,6 +188,41 @@ const createRequestListener = (routes) => async (req, res) => {
     console.error('Erro ao responder:', error);
     sendJson(res, 500, { error: 'Erro interno.' });
   }
+};
+
+// O cliente de demonstração da fonte, sem os campos que o contrato
+// recusa. `sampleCustomer` existe desde `08-sources.js` para a demo de
+// inferência e carrega o atributo protegido junto; aqui ele é publicado,
+// e publicar um exemplo que o serviço recusaria seria pior do que não
+// publicar exemplo nenhum.
+const exampleCustomer = (source) => {
+  const { rejected = [] } = source.requestSchema;
+
+  return Object.fromEntries(
+    Object.entries(source.sampleCustomer).filter(([field]) => !rejected.includes(field)),
+  );
+};
+
+// A faixa que cada coluna numérica REALMENTE teve no treino, reconstruída
+// do scaler gravado no pacote: `min` e `min + range`.
+//
+// Ela não valida nada — mandar `creditAmount: 500000` continua sendo
+// aceito, e continua saindo de [0, 1] de propósito. O que ela permite é
+// que quem chama SAIBA disso: hoje um valor muito fora da faixa é
+// pontuado sem nenhum sinal de que a rede nunca viu nada parecido, e
+// esse silêncio é a última limitação da lista do serviço.
+//
+// Fonte sem colunas numéricas escaladas (a sintética mede a escala por
+// constantes) devolve `{}` — não é erro, é ausência de scaler.
+const observedRange = ({ scaler }) => {
+  if (!scaler) {
+    return {};
+  }
+
+  return Object.fromEntries(scaler.featureNames.map((field) => [field, {
+    min: scaler.min[field],
+    max: scaler.min[field] + scaler.range[field],
+  }]));
 };
 
 // Monta as rotas a partir de um pacote já carregado. `POST /risk-score`
@@ -204,9 +264,35 @@ const createRoutes = (artifacts) => {
         status: 200,
         body: {
           source: metadata.source,
+          label: source.label,
           encoding: metadata.encoding,
           threshold: metadata.threshold,
+
+          // O limiar sozinho é um número; a estratégia é o que explica por
+          // que ele não é 0.5. Quem integra precisa dos dois para saber o
+          // que está comparando.
+          thresholdStrategy: metadata.thresholdStrategy,
+
+          // A forma da rede que produziu os pesos. Não muda a integração,
+          // mas é o que permite a alguém — ou a uma tela — descrever o
+          // caminho que a entrada percorre em vez de supô-lo.
+          model: {
+            features: metadata.featureNames.length,
+            units: metadata.training?.units ?? [],
+            savedAt: metadata.savedAt,
+          },
           request: describeSchema(schema),
+
+          // A faixa vista no treino, por coluna numérica. Quem monta um
+          // formulário sobre este contrato descobre daqui o que é um
+          // valor plausível — sem precisar abrir o `metadata.json`.
+          observedRange: observedRange(metadata),
+
+          // Um payload que FUNCIONA vale mais que a descrição do payload.
+          // Os campos recusados saem daqui: publicar o exemplo com o
+          // atributo protegido dentro seria publicar um corpo que o
+          // próprio serviço devolve com 400.
+          example: exampleCustomer(source),
         },
       }),
     },
@@ -227,8 +313,11 @@ const createRoutes = (artifacts) => {
   };
 };
 
-const createApi = (artifacts) =>
-  http.createServer(createRequestListener(createRoutes(artifacts)));
+// A página vem junto por padrão. `createApi(artifacts, null)` devolve o
+// serviço puro, sem nada estático — que é o que se sobe quando a API não
+// é a coisa que alguém abre no navegador.
+const createApi = (artifacts, fallback = createWebHandler()) =>
+  http.createServer(createRequestListener(createRoutes(artifacts), fallback));
 
 // Promisificado para que o script de entrada possa dar `await` e imprimir
 // a porta REAL — com `--port=0` o sistema escolhe uma, e é assim que os
@@ -240,7 +329,10 @@ const listen = (server, port = API_PORT) => new Promise((resolve, reject) => {
 
 module.exports = {
   scoreCustomer,
+  exampleCustomer,
+  observedRange,
   sendJson,
+  sendAsset,
   readJsonBody,
   isJsonRequest,
   createRequestListener,

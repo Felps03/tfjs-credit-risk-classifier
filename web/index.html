@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fluxo da análise · TFJS Credit Risk Classifier</title>
+  <meta name="description" content="Como um cliente entra, é relacionado pela rede e vira uma probabilidade de inadimplência.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/app.css">
+</head>
+<body>
+  <a class="skip-link" href="#conteudo">Pular para a análise</a>
+
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="topbar__identity">
+        <span class="topbar__mark" aria-hidden="true">🧠</span>
+        <div>
+          <p class="topbar__title">Fluxo da análise de crédito</p>
+          <p class="topbar__subtitle">dados de entrada → relacionamento → resultado</p>
+        </div>
+      </div>
+
+      <div class="topbar__actions">
+        <button class="button" type="button" data-action="recarregar">Reprocessar</button>
+        <button class="button button--icon" type="button" data-action="tema" aria-label="Alternar tema">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page" id="conteudo">
+    <p class="page__lead">
+      Um cliente é enviado ao serviço em unidades brutas. As colunas numéricas passam
+      pela escala medida no treino, as qualitativas viram colunas one-hot, e as duas
+      coisas só se encontram na primeira camada oculta — é ali que os sinais começam a
+      ser combinados. No fim, uma única probabilidade, comparada com o limiar que veio
+      da matriz de custo.
+    </p>
+
+    <data-processing-flow></data-processing-flow>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -135,6 +135,14 @@ const {
   createApi,
   listen,
   resolvePort,
+  exampleCustomer,
+  observedRange,
+  contentType,
+  withIndex,
+  resolveAsset,
+  readAsset,
+  createWebHandler,
+  WEB_DIR,
 } = require('../index');
 
 // ==================================================
@@ -4827,5 +4835,297 @@ describe('resolvePort', () => {
     assert.throws(() => resolvePort(['--port=abc']), /Valor inválido/);
     assert.throws(() => resolvePort(['--port=8080.5']), /Valor inválido/);
     assert.throws(() => resolvePort(['--port=']), /Valor inválido/);
+  });
+});
+
+
+// ==================================================
+// A página servida junto da API
+// ==================================================
+describe('exampleCustomer', () => {
+  it('dada uma fonte com atributo protegido, quando publicada, então o exemplo sai sem ele', () => {
+    // Given — publicar um exemplo com o campo recusado dentro seria
+    // publicar um corpo que o próprio serviço devolve com 400
+    const exemplo = exampleCustomer(GERMAN_SOURCE);
+
+    // Then
+    assert.equal('personalStatus' in exemplo, false);
+    assert.equal(exemplo.durationMonths, GERMAN_SOURCE.sampleCustomer.durationMonths);
+  });
+
+  it('dado o exemplo publicado, quando validado pelo contrato, então passa sem erro', () => {
+    // Given — é a garantia que importa: o exemplo TEM que ser aceitável
+    const { errors } = validateCustomer(
+      exampleCustomer(GERMAN_SOURCE),
+      GERMAN_SOURCE.requestSchema,
+    );
+
+    // Then
+    assert.deepEqual(errors, []);
+  });
+
+  it('dada uma fonte sem campo recusado, quando publicada, então o exemplo sai inteiro', () => {
+    // Given / When / Then
+    assert.deepEqual(exampleCustomer(SYNTHETIC_SOURCE), SYNTHETIC_SOURCE.sampleCustomer);
+  });
+});
+
+describe('observedRange', () => {
+  it('dado o scaler do pacote, quando publicado, então vira min e max por coluna', () => {
+    // Given — o pacote guarda `min` e `range`; quem monta um formulário
+    // precisa de `min` e `max`, e não deveria fazer essa conta sozinho
+    const faixa = observedRange({
+      scaler: {
+        featureNames: ['age', 'creditAmount'],
+        min: { age: 19, creditAmount: 250 },
+        range: { age: 56, creditAmount: 18174 },
+      },
+    });
+
+    // Then
+    assert.deepEqual(faixa.age, { min: 19, max: 75 });
+    assert.deepEqual(faixa.creditAmount, { min: 250, max: 18424 });
+  });
+
+  it('dado um pacote sem scaler, quando publicado, então devolve vazio', () => {
+    // Given — a fonte sintética mede a escala por constantes: não há
+    // scaler para publicar, e isso não é erro
+    assert.deepEqual(observedRange({ scaler: null }), {});
+    assert.deepEqual(observedRange({}), {});
+  });
+
+  it('dada a faixa publicada, quando comparada, então não restringe o contrato', () => {
+    // Given — a faixa INFORMA, não valida: um valor fora dela continua
+    // sendo aceito pelo `POST /risk-score`, e é essa a intenção
+    const faixa = observedRange({
+      scaler: { featureNames: ['age'], min: { age: 19 }, range: { age: 56 } },
+    });
+    const { errors } = validateCustomer(
+      { ...exampleCustomer(GERMAN_SOURCE), age: 200 },
+      GERMAN_SOURCE.requestSchema,
+    );
+
+    // Then — 200 está muito fora de [19, 75] e mesmo assim passa
+    assert.ok(faixa.age.max < 200);
+    assert.deepEqual(errors, []);
+  });
+});
+
+describe('contentType', () => {
+  it('dadas as extensões da página, quando consultadas, então cada uma tem seu tipo', () => {
+    // Given — um módulo ES servido como text/plain é recusado pelo
+    // `<script type="module">` com um erro que não diz isso
+    assert.match(contentType('/web/index.html'), /^text\/html/);
+    assert.match(contentType('/web/styles/app.css'), /^text\/css/);
+    assert.match(contentType('/web/js/app.js'), /^text\/javascript/);
+    assert.equal(contentType('/web/icone.svg'), 'image/svg+xml');
+  });
+
+  it('dada uma extensão desconhecida, quando consultada, então cai no genérico', () => {
+    // Given / When / Then
+    assert.equal(contentType('/web/dados.bin'), 'application/octet-stream');
+  });
+
+  it('dada uma extensão em maiúsculas, quando consultada, então é reconhecida', () => {
+    // Given / When / Then
+    assert.match(contentType('/web/INDEX.HTML'), /^text\/html/);
+  });
+});
+
+describe('withIndex', () => {
+  it('dado um caminho de pasta, quando resolvido, então procura o index', () => {
+    // Given — `/` não é um arquivo; é a intenção de abrir a página
+    assert.equal(withIndex('/'), '/index.html');
+    assert.equal(withIndex('/js/'), '/js/index.html');
+  });
+
+  it('dado um caminho de arquivo, quando resolvido, então fica como está', () => {
+    // Given / When / Then
+    assert.equal(withIndex('/js/app.js'), '/js/app.js');
+  });
+});
+
+describe('resolveAsset', () => {
+  it('dado um caminho dentro da pasta, quando resolvido, então devolve o absoluto', () => {
+    // Given / When / Then
+    assert.equal(resolveAsset('/js/app.js'), path.join(WEB_DIR, 'js', 'app.js'));
+  });
+
+  it('dado `..` no caminho, quando resolvido, então não escapa da pasta', () => {
+    // Given — a garantia não é "devolve null", é "nunca sai de `web/`".
+    // O `..` é NEUTRALIZADO antes de virar caminho: `/../package.json`
+    // resolve para `web/package.json`, que não existe e vira 404. O
+    // arquivo do projeto continua fora de alcance, que é o que importa.
+    ['/../package.json', '/js/../../index.js', '/../../../../etc/passwd']
+      .forEach((caminho) => {
+        const resolvido = resolveAsset(caminho);
+
+        assert.ok(
+          resolvido === null || resolvido.startsWith(WEB_DIR + path.sep),
+          `${caminho} escapou para ${resolvido}`,
+        );
+      });
+  });
+
+  it('dado `..` para um irmão com o mesmo prefixo, quando resolvido, então não escapa', () => {
+    // Given — é o caso que o separador na comparação fecha: sem ele, uma
+    // pasta vizinha `web-secreta` passaria no `startsWith` de `web`
+    const resolvido = resolveAsset('/../web-secreta/senha.txt');
+
+    assert.ok(resolvido.startsWith(WEB_DIR + path.sep));
+    assert.equal(readAsset('/../web-secreta/senha.txt'), null);
+  });
+
+  it('dado um byte nulo, quando resolvido, então recusa', () => {
+    // Given / When / Then
+    assert.equal(resolveAsset('/js/app.js\u0000.png'), null);
+  });
+
+  it('dada uma URI mal codificada, quando resolvida, então recusa em vez de lançar', () => {
+    // Given — `%` solto é URI inválida; quem manda isso não pede página
+    assert.equal(resolveAsset('/%E0%A4%A'), null);
+  });
+
+  it('dado `..` percent-encoded, quando resolvido, então também é neutralizado', () => {
+    // Given — decodificar ANTES de normalizar é o que fecha este caso.
+    // Sem a ordem certa, `%2e%2e` atravessaria o normalize intacto e só
+    // viraria `..` na hora de tocar o disco.
+    const resolvido = resolveAsset('/%2e%2e/package.json');
+
+    assert.ok(resolvido.startsWith(WEB_DIR + path.sep));
+    assert.equal(readAsset('/%2e%2e/package.json'), null);
+  });
+});
+
+describe('readAsset', () => {
+  it('dado um arquivo existente, quando lido, então devolve corpo e tipo', () => {
+    // Given / When
+    const asset = readAsset('/index.html');
+
+    // Then
+    assert.match(asset.type, /^text\/html/);
+    assert.ok(asset.body.includes('data-processing-flow'));
+  });
+
+  it('dada a raiz, quando lida, então serve o index', () => {
+    // Given / When / Then
+    assert.deepEqual(readAsset('/').body, readAsset('/index.html').body);
+  });
+
+  it('dado um arquivo inexistente, quando lido, então devolve null', () => {
+    // Given — o `null` é o que devolve a palavra ao 404 do roteador
+    assert.equal(readAsset('/nao-existe.js'), null);
+  });
+
+  it('dada uma pasta, quando lida, então devolve null', () => {
+    // Given — servir o conteúdo de um diretório não é servir uma página
+    assert.equal(readAsset('/js'), null);
+  });
+});
+
+describe('createWebHandler', () => {
+  it('dado um GET de arquivo existente, quando tratado, então responde 200', () => {
+    // Given / When
+    const resposta = createWebHandler()({ method: 'GET' }, '/styles/app.css');
+
+    // Then
+    assert.equal(resposta.status, 200);
+    assert.match(resposta.type, /^text\/css/);
+    assert.equal(resposta.headers['cache-control'], 'no-cache');
+  });
+
+  it('dado um POST, quando tratado, então devolve null', () => {
+    // Given — arquivo estático não se escreve pela porta da frente
+    assert.equal(createWebHandler()({ method: 'POST' }, '/index.html'), null);
+  });
+
+  it('dado um caminho fora da pasta, quando tratado, então devolve null', () => {
+    // Given / When / Then
+    assert.equal(createWebHandler()({ method: 'GET' }, '/../package.json'), null);
+  });
+});
+
+describe('createApi com os arquivos da página', () => {
+  let server;
+  let base;
+
+  before(async () => {
+    // Given — as três rotas da API mais os arquivos da página
+    const artifacts = {
+      metadata: {
+        source: 'synthetic',
+        encoding: 'raw',
+        threshold: 0.3,
+        thresholdStrategy: 'teste',
+        featureNames: SYNTHETIC_SOURCE.featureNames,
+        savedAt: '2026-01-01T00:00:00.000Z',
+        training: { units: [4] },
+      },
+      source: SYNTHETIC_SOURCE,
+      predict: () => 0.5,
+    };
+
+    server = createApi(artifacts);
+    base = `http://localhost:${await listen(server, 0)}`;
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it('dada a raiz, quando pedida, então serve a página', async () => {
+    // Given / When
+    const response = await fetch(`${base}/`);
+
+    // Then
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/html/);
+  });
+
+  it('dado um caminho que não é rota nem arquivo, quando pedido, então volta ao 404 da API', async () => {
+    // Given — o fallback devolve `null` e a palavra volta ao roteador
+    const response = await fetch(`${base}/xpto`);
+    const body = await response.json();
+
+    // Then
+    assert.equal(response.status, 404);
+    assert.ok(body.routes.some((rota) => rota.includes('/risk-score')));
+  });
+
+  it('dado `..` na URL, quando pedido, então não entrega arquivo do projeto', async () => {
+    // Given / When / Then
+    assert.equal((await fetch(`${base}/%2e%2e/package.json`)).status, 404);
+  });
+
+  it('dado createApi sem fallback, quando a raiz é pedida, então responde 404', async () => {
+    // Given — o serviço puro, sem nada estático
+    const puro = createApi({
+      metadata: {
+        source: 'synthetic',
+        encoding: 'raw',
+        threshold: 0.3,
+        featureNames: SYNTHETIC_SOURCE.featureNames,
+        savedAt: '2026-01-01T00:00:00.000Z',
+      },
+      source: SYNTHETIC_SOURCE,
+      predict: () => 0.5,
+    }, null);
+    const url = `http://localhost:${await listen(puro, 0)}/`;
+
+    // When / Then
+    assert.equal((await fetch(url)).status, 404);
+
+    await new Promise((resolve) => puro.close(resolve));
+  });
+
+  it('dado GET /schema, quando pedido, então publica a forma da rede e um exemplo válido', async () => {
+    // Given — sem a topologia, uma tela não descreve o caminho do dado;
+    // sem o exemplo, quem integra descobre o payload por tentativa e erro
+    const body = await (await fetch(`${base}/schema`)).json();
+
+    // Then
+    assert.deepEqual(body.model.units, [4]);
+    assert.equal(body.model.features, SYNTHETIC_SOURCE.featureNames.length);
+    assert.equal(body.thresholdStrategy, 'teste');
+    assert.deepEqual(body.example, SYNTHETIC_SOURCE.sampleCustomer);
+    assert.deepEqual(body.observedRange, {});
   });
 });
