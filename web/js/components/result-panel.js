@@ -26,14 +26,16 @@ const trilha = (item) => el('div', { class: 'result__track', attrs: { 'aria-hidd
     : null,
 ]);
 
+// O rótulo em cima, o número embaixo e grande. Lado a lado eles
+// competiam: um rótulo de cinco palavras e a resposta da rede no mesmo
+// tamanho, na mesma linha. Empilhados, a leitura tem uma ordem — o que
+// está sendo medido, e quanto deu.
 const result = (item) => el('li', {
   class: 'result',
   dataset: { tone: item.tone ?? 'accent', result: item.id },
 }, [
-  el('div', { class: 'result__head' }, [
-    el('span', { class: 'result__label', text: item.label }),
-    el('span', { class: 'result__value', text: formatPercent(item.value) }),
-  ]),
+  el('p', { class: 'result__label', text: item.label }),
+  el('p', { class: 'result__value', text: formatPercent(item.value) }),
   trilha(item),
   item.marker
     ? el('p', {
@@ -63,6 +65,32 @@ const verdict = (decision) => el('div', {
     }),
   ]),
 ]);
+
+// O número rola até o valor novo em vez de trocar de golpe. Não é
+// enfeite: repontuando a cada tecla, um texto que pisca de 68,7% para
+// 71,1% não deixa ver QUE direção a mudança tomou — e a direção é a
+// informação. Rolando, o campo que subiu o risco é visível.
+const DURACAO_CONTAGEM = 420;
+
+const contarAte = (node, de, para, quando) => {
+  const inicio = quando;
+
+  const passo = (agora) => {
+    const t = Math.min(1, (agora - inicio) / DURACAO_CONTAGEM);
+
+    // Desacelera no fim: o número chega no valor em vez de bater nele.
+    const suave = 1 - (1 - t) ** 3;
+
+    node.textContent = formatPercent(de + (para - de) * suave);
+
+    if (t < 1) {
+      node.dataset.raf = String(requestAnimationFrame(passo));
+    }
+  };
+
+  cancelAnimationFrame(Number(node.dataset.raf));
+  node.dataset.raf = String(requestAnimationFrame(passo));
+};
 
 export class FlowResults extends HTMLElement {
   disconnectedCallback() {
@@ -94,13 +122,22 @@ export class FlowResults extends HTMLElement {
         return;
       }
 
-      linha.querySelector('.result__value').textContent = formatPercent(item.value);
+      const alvo = linha.querySelector('.result__value');
+      const anterior = this.valores?.[item.id] ?? item.value;
+
+      if (reduzMovimento()) {
+        alvo.textContent = formatPercent(item.value);
+      } else {
+        contarAte(alvo, anterior, item.value, performance.now());
+      }
+
       linha.querySelector('.result__bar').style.setProperty('--fill', `${item.value * 100}%`);
     });
 
     // A partir da primeira atualização a transição encurta: 900ms é o
     // tempo certo para a barra APARECER, e longo demais para ela
     // acompanhar alguém mexendo num campo.
+    this.valores = Object.fromEntries(results.map((item) => [item.id, item.value]));
     this.querySelector('.result-list')?.classList.add('is-live');
 
     if (decision) {
@@ -213,6 +250,7 @@ export class FlowResults extends HTMLElement {
       }),
     ]));
 
+    this.valores = Object.fromEntries(results.map((item) => [item.id, item.value]));
     this.observarEntrada(lista);
     this.anunciar();
   }

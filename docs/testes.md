@@ -89,6 +89,8 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | Contrato de entrada das fontes | O que a API exige é **exatamente** o que `toVector` lê: uma coluna a menos viraria `NaN`, uma a mais seria recusada |
 | `exampleCustomer` | O exemplo publicado sai **sem o atributo protegido** e passa pela própria validação do serviço — publicar um payload que renderia `400` seria pior que não publicar nenhum |
 | `observedRange` | `min` e `range` do scaler viram `min` e `max`, pacote sem scaler devolve vazio, e a faixa **não restringe o contrato**: `age: 200` está fora dela e continua sendo aceito |
+| Bloco de treino no `GET /schema` | A curva viaja inteira com os hiperparâmetros; pacote salvo **antes** do histórico devolve o bloco sem ele; pacote sem bloco nenhum devolve `null` sem quebrar |
+| Bloco de avaliação no `GET /schema` | Baseline, matriz e custos viajam inteiros; pacote sem avaliação devolve `null`; limiar `Infinity` entre os candidatos é gravado como `null` em vez de um número falso |
 | `resolveAsset` / `readAsset` / `contentType` | `..`, `..` percent-encoded, byte nulo, URI malformada e irmão de mesmo prefixo — **nenhum sai de `web/`**; `/` serve o index, pasta e arquivo inexistente devolvem `null`, e cada extensão tem seu `content-type` |
 | Página servida junto da API | `GET /` devolve o HTML, `/xpto` **continua sendo o 404 da API** (o fallback devolve a palavra ao roteador), `createApi(artifacts, null)` sobe o serviço puro, e `/schema` publica topologia, estratégia do limiar e o exemplo |
 | `resolvePort` | Padrão, `--port=8080`, **`--port=0` aceito** (porta livre do sistema) e `99999`, `abc`, `8080.5` e vazio lançando |

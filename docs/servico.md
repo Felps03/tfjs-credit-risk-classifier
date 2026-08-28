@@ -244,7 +244,7 @@ Dois detalhes que só aparecem quando se escreve o servidor à mão:
 
 ## 🖥️ A página do fluxo
 
-`http://localhost:3000/` não devolve JSON: devolve uma página que mostra **o caminho que o dado percorre** — os campos que entraram, as etapas que os relacionaram e a probabilidade que saiu.
+`http://localhost:3000/` não devolve JSON: devolve uma página com três modos sobre o mesmo pacote — **Análise**, o caminho que o dado percorre até virar uma probabilidade; **Treinamento**, como a rede aprendeu a percorrê-lo; e **Avaliação**, quanto ela acerta e quem ela penaliza.
 
 ```text
 DADOS UTILIZADOS          PROCESSAMENTO                    RESULTADOS DA ANÁLISE
@@ -295,6 +295,102 @@ O `GET /schema` passou a publicar `observedRange`: o mínimo e o máximo que cad
 Ele **não valida nada**. `creditAmount: 500000` continua sendo aceito, continua saindo de `[0, 1]` de propósito, e continua sendo pontuado. O que mudou é que agora a página consegue **avisar**: o campo fica amarelo e mostra `treino: 250 a 18424`.
 
 Era a última limitação da lista deste documento que ninguém conseguia ver acontecer. Ela não foi corrigida — um valor absurdo ainda recebe uma probabilidade de aparência normal —, mas deixou de ser silenciosa para quem usa a tela.
+
+### Modo treinamento
+
+A mesma rede tem duas coisas para contar: **como ela decide** e **como ela aprendeu a decidir**. O seletor no topo troca entre as duas, e a coluna do meio — os nós e as ligações — é a mesma nas duas. É de propósito: não são duas telas, é a mesma rede vista por outro ângulo.
+
+```text
+   Passo à frente  │  Erro medido  │  Passo atrás  │  Pesos ajustados
+   ────────────────┴───────────────┴───────────────┴─────────────────
+                            ▶ época 7 de 25
+
+  COMO FOI TREINADO          O LAÇO DO TREINO           A CURVA DO TREINO
+                                                          0.78 ╲
+  800 clientes de treino      ○ ─── ○ ─── ○                    ╲╲___ treino
+  57 → 16 → 8 → 1          ╱  │ ╳  │ ╳  │  ╲                    ╲   ‾‾‾──
+  1.073 parâmetros        ●   ○ ─── ○ ─── ○   ●                  ╲__
+  Lotes de 32              ╲  │ ╳  │ ╳  │  ╱                        ‾‾──── validação
+  L2 0.003 · dropout 0.2      ○ ─── ○ ─── ○                  0.42        ┆ melhor: 20
+  Parou na época 25 de 40                                      1        25
+```
+
+**A curva é medida; a animação é esquema.** A distinção é explícita na tela porque as duas coisas têm status diferentes:
+
+- Os pontos da curva vêm do `history` que o `model.fit` devolveu, época por época, gravado no pacote por `npm start`. Nenhum é suavizado ou interpolado — se a linha sobe e desce, é porque subiu e desceu.
+- A animação dos quatro passos é o **procedimento**, não os valores. Não existe registro dos pesos época a época, então fingir que os círculos mostram os pesos mudando seria inventar. O que se anima é o algoritmo; o que se mede está na curva ao lado.
+
+O passo atrás inverte o sentido dos pontos que percorrem as ligações. Não há um segundo conjunto de curvas para isso: é a mesma animação ao contrário, porque é literalmente o que a retropropagação faz — o erro volta pelas **mesmas** ligações por onde o dado veio.
+
+**As duas linhas são o argumento do projeto em uma imagem.** A de treino continua caindo até o fim; a de validação achata na época 20 e não melhora mais. A distância entre as duas é o modelo decorando em vez de aprender, e as cinco épocas entre a melhor validação e a parada são exatamente a paciência do *early stopping*. É o laço do fluxograma do README, com números.
+
+Sob `prefers-reduced-motion` o laço não roda sozinho: a curva aparece inteira e a barra de épocas continua funcionando. A informação é a mesma; o que some é o movimento.
+
+### O histórico no pacote
+
+O `model.fit` sempre devolveu o histórico e ele sempre foi descartado. Agora ele vai para o `metadata.json`, com quatro casas decimais:
+
+```json
+"training": {
+  "customers": 800, "units": [16, 8], "l2": 0.003, "dropout": 0.2,
+  "epochs": 40, "batchSize": 32, "validationSplit": 0.2, "patience": 5,
+  "history": {
+    "loss":    [0.7539, 0.7111, 0.689,  "…", 0.5334],
+    "valLoss": [0.6407, 0.5809, 0.55,   "…", 0.4479]
+  }
+}
+```
+
+Custa alguns kilobytes e paga por si: é a **única evidência** do que aconteceu durante o treino. Os hiperparâmetros entram junto pelo mesmo motivo que o `scaler` entrou — descrever um treino de memória é o jeito mais fácil de descrever outro.
+
+Um pacote salvo antes disso devolve o bloco sem `history`, e a tela diz isso em vez de desenhar uma curva vazia: *"rode `npm start` para treinar de novo"*.
+
+### Modo avaliação
+
+O terceiro modo responde a pergunta que os outros dois não respondem: **o modelo presta?**
+
+```text
+   Padrão (0.5)      │  Youden (max J)   │  ▸ Menor custo
+   custo 180          │  custo 127         │  custo 107
+
+  QUANTO ELE ACERTA        ONDE ELE ERRA            QUEM ELE PENALIZA
+
+  A rede         72,0%     73 TN   │   67 FP        Mulheres      n=66
+  ██████████████░░░░       ────────┼────────        marcados  65,2% ████████
+  Chutar         70,0%      8 FN   │   52 TP        real      30,3% ████
+  █████████████░░░░░                                Homens        n=134
+                           precision 43,7%          marcados  53,7% ██████
+  AUC 0,7417               recall    86,7%          real      29,9% ████
+  treino−teste 7,6%        F1        58,1%          razão de aprovação 0,805
+```
+
+**A acurácia nunca aparece sozinha.** Ela aparece encostada no piso da classe majoritária — a taxa de quem chuta "bom pagador" para todo mundo sem olhar para nenhuma feature. 72% parece ótimo até estar ao lado de 70%, e a distância entre os dois é tudo que o treino acrescentou. Publicar um sem o outro seria publicar meia verdade.
+
+**Os dois erros não custam igual, e a matriz mostra isso.** Recusar quem pagaria (FP) custa 1; deixar passar quem não paga (FN) custa 5. É essa assimetria que puxou o limiar de 0,5 para 0,225 — e a faixa do topo mostra os três cortes candidatos com o preço de cada um, com o que está decidindo em destaque. É a única parte da tela em que o limiar deixa de ser um número dado e vira uma **escolha com alternativas**.
+
+**A auditoria fecha o argumento do `personalStatus`.** A tela já dizia, na coluna de entrada, que o campo é recusado porque "a auditoria usa essa coluna; a decisão, não". Faltava mostrar a auditoria. Agora ela está lá: taxa de marcação por grupo ao lado da inadimplência real do grupo, os inadimplentes que passaram batido, e a razão de aprovação com o veredito da regra dos quatro quintos.
+
+As manchetes desses modos citam números — "Acertar 72% parece bom. Chutar acerta 70%" — e **são montadas a partir do pacote carregado**, não escritas à mão. Um retreino muda os números na tela e no texto junto; escrevê-los à mão faria a página mentir na primeira vez que alguém rodasse `npm start`.
+
+### O que o pacote passou a guardar
+
+Assim como o histórico de treino, tudo isto era calculado, impresso no terminal e descartado:
+
+```json
+"evaluation": {
+  "baseline": 0.7, "testAccuracy": 0.72, "trainAccuracy": 0.7962,
+  "testLoss": 0.536, "testCustomers": 200, "auc": 0.7417,
+  "confusion": { "truePositives": 52, "trueNegatives": 73,
+                 "falsePositives": 67, "falseNegatives": 8 },
+  "metrics":   { "precision": 0.437, "recall": 0.8667, "f1Score": 0.581 },
+  "costs":     { "falsePositive": 1, "falseNegative": 5 },
+  "thresholds": [ { "label": "Menor custo", "threshold": 0.225, "cost": 107 } ],
+  "audit": { "politica": "Limiar único", "women": {…}, "men": {…},
+             "approvalRatio": 0.805 }
+}
+```
+
+Duas escolhas que valem registro. A matriz gravada é a do limiar **escolhido**, não a do `0.5` herdado — era a única que existia apenas dentro de um `console.log`. E um limiar `Infinity` (o ponto da ROC que não aprova ninguém) é gravado como `null` de propósito: `JSON.stringify` já o transformaria em `null` de qualquer forma, e um número falso no lugar seria pior.
 
 ### De onde vêm os dados
 

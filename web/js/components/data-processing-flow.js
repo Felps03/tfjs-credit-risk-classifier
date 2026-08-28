@@ -1,8 +1,14 @@
-import { clear, el, icon } from '../dom.js';
+import { clear, el, icon, reduzMovimento } from '../dom.js';
+import { createPlayer, FASES } from '../training-player.js';
 import './input-panel.js';
 import './processing-network.js';
 import './result-panel.js';
 import './connection-layer.js';
+import './training-facts.js';
+import './loss-chart.js';
+import './accuracy-panel.js';
+import './confusion-panel.js';
+import './audit-panel.js';
 
 // --------------------------------------------------
 // <data-processing-flow> — a composição
@@ -102,6 +108,27 @@ export class DataProcessingFlow extends HTMLElement {
     this.saidas?.update({ results, decision });
   }
 
+  // 'analise' | 'treinamento'. A rede do meio é a MESMA nos dois: só os
+  // painéis das pontas trocam, e é essa continuidade que faz o modo
+  // treinamento parecer a mesma rede vista por outro ângulo, e não uma
+  // segunda tela.
+  set mode(valor) {
+    this.modo = ['treinamento', 'avaliacao'].includes(valor) ? valor : 'analise';
+    this.render();
+  }
+
+  get mode() {
+    return this.modo ?? 'analise';
+  }
+
+  set training(valor) {
+    this.treino = valor;
+  }
+
+  set evaluation(valor) {
+    this.avaliacao = valor;
+  }
+
   set scoreError(erro) {
     if (this.saidas) {
       this.saidas.problem = erro;
@@ -151,6 +178,14 @@ export class DataProcessingFlow extends HTMLElement {
       });
     }
 
+    if (this.mode === 'treinamento' && this.estado === 'ready') {
+      return this.fluxoTreino();
+    }
+
+    if (this.mode === 'avaliacao' && this.estado === 'ready') {
+      return this.fluxoAvaliacao();
+    }
+
     if (this.estado === 'empty' || this.vazio) {
       return aviso({
         tone: 'neutral',
@@ -196,12 +231,238 @@ export class DataProcessingFlow extends HTMLElement {
     clear(this);
     this.append(flow, this.rodape(meta));
 
+    // O rastro precisa saber para qual NÓ o campo vai. Numérica termina
+    // na escala min–max, qualitativa na codificação — é a mesma regra que
+    // o mapper usou para desenhar as ligações, e ela vive num lugar só.
+    const preparo = layers[0];
+    const destino = {
+      numeric: preparo.nodes.find((no) => no.id === 'escala'),
+      categorical: preparo.nodes.find((no) => no.id === 'codificacao'),
+    };
+
+    flow.addEventListener('flow-trace', (evento) => {
+      const { campo, grupo } = evento.detail;
+      const no = destino[grupo === 'categorical' ? 'categorical' : 'numeric'];
+
+      ligacoes.trace = campo;
+      rede.trace = campo && no ? `${preparo.id}:${no.id}` : null;
+    });
+
     entradas.data = { inputs, rejected, example };
     rede.data = { layers, meta };
     saidas.data = { results, decision };
     ligacoes.data = connections;
 
     return null;
+  }
+
+  // --------------------------------------------------
+  // Modo avaliação
+  // --------------------------------------------------
+  // Sem rede no meio: aqui o assunto não é o caminho do dado, é o
+  // resultado dele. As ligações ainda saem do card da esquerda e chegam
+  // no da direita — acurácia e auditoria são as duas pontas da mesma
+  // medição, e o feixe entre elas passa por onde os erros aparecem.
+  fluxoAvaliacao() {
+    if (!this.avaliacao) {
+      clear(this);
+      this.append(aviso({
+        tone: 'neutral',
+        titulo: 'Sem avaliação no pacote',
+        texto: 'Este pacote foi salvo antes de as métricas passarem a ser gravadas. '
+          + 'Rode `npm start` para treinar de novo — os números aparecem sozinhos.',
+      }));
+
+      return null;
+    }
+
+    const acuracia = el('flow-accuracy');
+    const matriz = el('flow-confusion');
+    const auditoria = el('flow-audit');
+
+    const flow = el('div', {
+      class: 'flow',
+      dataset: { mode: 'avaliacao' },
+      attrs: { role: 'group', 'aria-label': 'Quanto o modelo acerta e quem ele penaliza' },
+    }, [
+      el('div', { class: 'flow__stage flow__stage--inputs' }, [acuracia]),
+      el('div', { class: 'flow__stage flow__stage--network' }, [matriz]),
+      el('div', { class: 'flow__stage flow__stage--results' }, [auditoria]),
+    ]);
+
+    clear(this);
+    this.append(this.faixaDeLimiares(), flow, this.rodape(this.dados?.meta));
+
+    acuracia.data = this.avaliacao;
+    matriz.data = this.avaliacao;
+    auditoria.data = this.avaliacao;
+
+    return null;
+  }
+
+  // Os três cortes comparados, com o que está decidindo em destaque. É a
+  // única parte da tela em que o limiar deixa de ser um número dado e
+  // passa a ser uma ESCOLHA com alternativas e preço.
+  faixaDeLimiares() {
+    const { thresholds, costs } = this.avaliacao;
+
+    return el('section', { class: 'training-bar' }, [
+      el('ol', { class: 'phase-list' }, thresholds.map((corte) => el('li', {
+        class: 'phase',
+        dataset: { active: String(corte.ativo) },
+      }, [
+        el('span', { class: 'phase__label', text: corte.label }),
+        el('span', {
+          class: 'phase__detail',
+          text: corte.threshold === null
+            ? 'não aprova ninguém'
+            : `corte ${corte.threshold.toFixed(3).replace('.', ',')} · `
+              + `custo ${corte.cost} (${corte.falsePositives} FP, ${corte.falseNegatives} FN)`,
+        }),
+      ]))),
+      el('p', {
+        class: 'training-note',
+        text: `O limiar não é 0,5 herdado: com FN custando ${costs.falseNegative}× o FP, `
+          + 'o corte de menor custo desce e a rede passa a sinalizar mais.',
+      }),
+    ]);
+  }
+
+  // --------------------------------------------------
+  // Modo treinamento
+  // --------------------------------------------------
+  fluxoTreino() {
+    const { layers, meta, trainingConnections } = this.dados;
+
+    const fatos = el('flow-training-facts');
+    const rede = el('flow-network');
+    const grafico = el('flow-loss-chart');
+    const ligacoes = el('flow-connections');
+
+    this.redeTreino = rede;
+    this.grafico = grafico;
+    this.ligacoesTreino = ligacoes;
+
+    const flow = el('div', {
+      class: 'flow',
+      dataset: { mode: 'treinamento' },
+      attrs: { role: 'group', 'aria-label': 'Como o modelo foi treinado' },
+    }, [
+      el('div', { class: 'flow__stage flow__stage--inputs' }, [fatos]),
+      el('div', { class: 'flow__stage flow__stage--network' }, [rede]),
+      el('div', { class: 'flow__stage flow__stage--results' }, [grafico]),
+      ligacoes,
+    ]);
+
+    clear(this);
+    this.append(this.faixaDeFases(), flow, this.rodape(meta));
+
+    fatos.data = { facts: this.treino?.facts ?? [] };
+    rede.data = {
+      layers,
+      meta,
+      titulo: 'O laço do treino',
+      legenda: 'esquema do algoritmo — os números medidos estão na curva ao lado',
+    };
+    grafico.data = this.treino;
+    ligacoes.data = trainingConnections;
+    ligacoes.animateAll = true;
+
+    this.iniciarPlayer();
+
+    return null;
+  }
+
+  // Os quatro passos, sempre visíveis, com o atual em destaque. Sem eles
+  // a animação seria bonita e muda: pontinhos correndo não dizem
+  // "retropropagação" a ninguém que ainda não saiba o que é.
+  faixaDeFases() {
+    this.chips = FASES.map((fase) => el('li', {
+      class: 'phase',
+      dataset: { phase: fase.id },
+    }, [
+      el('span', { class: 'phase__label', text: fase.label }),
+      el('span', { class: 'phase__detail', text: fase.detail }),
+    ]));
+
+    this.botaoPlay = el('button', {
+      class: 'button button--primary',
+      type: 'button',
+      text: 'Pausar',
+    });
+    this.botaoPlay.addEventListener('click', () => this.player?.toggle());
+
+    this.barra = el('input', {
+      class: 'epoch-range',
+      type: 'range',
+      min: '0',
+      max: String((this.treino?.epochs ?? 1) - 1),
+      value: '0',
+      attrs: { 'aria-label': 'Época do treino' },
+    });
+    this.barra.addEventListener('input', () => this.player?.seek(Number(this.barra.value)));
+
+    this.rotuloEpoca = el('span', { class: 'epoch-readout' });
+
+    return el('section', { class: 'training-bar' }, [
+      el('ol', { class: 'phase-list' }, this.chips),
+      el('div', { class: 'training-controls' }, [
+        this.botaoPlay,
+        this.barra,
+        this.rotuloEpoca,
+      ]),
+    ]);
+  }
+
+  iniciarPlayer() {
+    this.player?.destroy();
+
+    if (!this.treino) {
+      return;
+    }
+
+    // Com movimento reduzido o laço não roda sozinho: a curva aparece
+    // inteira e a barra continua funcionando. A informação é a mesma; o
+    // que some é o movimento automático.
+    this.player = createPlayer({
+      epochs: this.treino.epochs,
+      autoplay: !reduzMovimento(),
+      onChange: (estado) => this.aplicarEstado(estado),
+    });
+  }
+
+  aplicarEstado({ epoca, fase, rodando }) {
+    this.redeTreino?.setAttribute('data-phase', fase.id);
+
+    // O passo atrás é o único momento em que o fluxo inverte — e é a
+    // coisa mais importante que esta tela tem a mostrar.
+    if (this.ligacoesTreino) {
+      this.ligacoesTreino.direction = fase.id === 'atras' ? 'backward' : 'forward';
+    }
+
+    if (this.grafico) {
+      this.grafico.epoch = epoca;
+    }
+
+    this.chips?.forEach((chip) => {
+      chip.dataset.active = String(chip.dataset.phase === fase.id);
+    });
+
+    if (this.barra && Number(this.barra.value) !== epoca) {
+      this.barra.value = String(epoca);
+    }
+
+    if (this.botaoPlay) {
+      this.botaoPlay.textContent = rodando ? 'Pausar' : 'Reproduzir';
+    }
+
+    if (this.rotuloEpoca) {
+      this.rotuloEpoca.textContent = `época ${epoca + 1} de ${this.treino.epochs}`;
+    }
+  }
+
+  disconnectedCallback() {
+    this.player?.destroy();
   }
 
   rodape(meta) {
@@ -224,6 +485,12 @@ export class DataProcessingFlow extends HTMLElement {
   }
 
   render() {
+    // Trocar de modo destrói a árvore inteira; o relógio do treino
+    // precisa parar junto, ou continuaria disparando contra nós que já
+    // não existem.
+    this.player?.destroy();
+    this.player = null;
+
     const conteudo = this.conteudo();
 
     // `fluxo()` já montou tudo por conta própria — ele precisa do DOM

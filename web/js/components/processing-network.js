@@ -17,7 +17,11 @@ import { anchorId } from '../mappers.js';
 
 const node = (layer, item) => el('li', {
   class: 'node-slot',
-  dataset: { named: String(Boolean(item.named)) },
+  dataset: { named: String(Boolean(item.named)), node: `${layer.id}:${item.id}` },
+
+  // `--ordem` escalona a entrada: os nós aparecem coluna a coluna, na
+  // mesma direção em que as ligações são traçadas.
+  attrs: { style: `--ordem: ${item.ordem}` },
 }, [
   el('span', {
     class: 'node',
@@ -37,18 +41,45 @@ const node = (layer, item) => el('li', {
 // rótulo dela vive no `aria-label` e no balão de hover, e não na tela.
 const nomeada = (layerId) => layerId === 'preparo' || layerId === 'saida';
 
-const layerBlock = (layer) => el('li', { class: 'network__layer' }, [
+const layerBlock = (layer, coluna) => el('li', {
+  class: 'network__layer',
+  attrs: { style: `--coluna: ${coluna}` },
+}, [
   el('h3', { class: 'network__layer-title', text: layer.title }),
   el('p', { class: 'network__layer-caption', text: layer.caption }),
-  el('ul', { class: 'network__nodes' }, layer.nodes.map((item) =>
-    node(layer, { ...item, named: nomeada(layer.id) }))),
+  el('ul', { class: 'network__nodes' }, layer.nodes.map((item, posicao) =>
+    node(layer, {
+      ...item,
+      named: nomeada(layer.id),
+      ordem: coluna * 3 + posicao,
+    }))),
 ]);
 
 export class FlowNetwork extends HTMLElement {
-  set data({ layers = [], meta = {} } = {}) {
+  set data({ layers = [], meta = {}, titulo = null, legenda = null } = {}) {
     this.layers = layers;
     this.meta = meta;
+    this.titulo = titulo;
+    this.legenda = legenda;
     this.render();
+  }
+
+  // A fase do treino chega como atributo e o CSS faz o resto: no passo
+  // atrás os nós pulsam, no ajuste eles acendem. Nenhum valor real é
+  // afirmado aqui — é o procedimento que está sendo mostrado, e a tela
+  // diz isso em texto ao lado.
+  set phase(valor) {
+    this.dataset.phase = valor ?? '';
+  }
+
+  // O destino de um campo acende junto com as ligações que saem dele.
+  // Sem isto, o rastro terminaria no vazio: as linhas iluminam e o nó em
+  // que elas chegam continua igual a todos os outros.
+  set trace(destino) {
+    this.querySelectorAll('.node-slot').forEach((slot) => {
+      slot.classList.toggle('is-traced', Boolean(destino) && slot.dataset.node === destino);
+    });
+    this.classList.toggle('is-tracing', Boolean(destino));
   }
 
   render() {
@@ -63,12 +94,12 @@ export class FlowNetwork extends HTMLElement {
       el('header', { class: 'panel__header panel__header--center' }, [
         el('h2', {
           class: 'panel__title',
-          text: 'Processamento',
+          text: this.titulo ?? 'Processamento',
           id: 'titulo-processamento',
         }),
         el('p', {
           class: 'panel__subtitle',
-          text: 'cada entrada influencia cada unidade — as ligações são a rede densa',
+          text: this.legenda ?? 'cada entrada influencia cada unidade — as ligações são a rede densa',
         }),
       ]),
 

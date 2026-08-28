@@ -197,6 +197,20 @@ export class FlowInputPanel extends HTMLElement {
 
     linha.append(...filhos.filter(Boolean));
 
+    // Passar o mouse ou o foco por uma linha ilumina o caminho DAQUELE
+    // campo pela rede. É a resposta visual a "para onde vai a idade?" —
+    // e o caminho é o real: numérica vai ao min–max, qualitativa ao
+    // one-hot. O evento sobe; quem sabe pintar é a camada de ligações.
+    const rastrear = (campo) => this.dispatchEvent(new CustomEvent('flow-trace', {
+      bubbles: true,
+      detail: { campo, grupo: input.group },
+    }));
+
+    linha.addEventListener('pointerenter', () => rastrear(input.id));
+    linha.addEventListener('pointerleave', () => rastrear(null));
+    linha.addEventListener('focusin', () => rastrear(input.id));
+    linha.addEventListener('focusout', () => rastrear(null));
+
     return linha;
   }
 

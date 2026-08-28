@@ -5129,3 +5129,123 @@ describe('createApi com os arquivos da página', () => {
     assert.deepEqual(body.observedRange, {});
   });
 });
+
+
+describe('GET /schema — o bloco de avaliação', () => {
+  const servir = async (metadata) => {
+    const server = createApi({
+      metadata: {
+        source: 'synthetic',
+        encoding: 'raw',
+        threshold: 0.3,
+        featureNames: SYNTHETIC_SOURCE.featureNames,
+        savedAt: '2026-01-01T00:00:00.000Z',
+        ...metadata,
+      },
+      source: SYNTHETIC_SOURCE,
+      predict: () => 0.5,
+    }, null);
+    const url = `http://localhost:${await listen(server, 0)}/schema`;
+    const body = await (await fetch(url)).json();
+
+    await new Promise((resolve) => server.close(resolve));
+
+    return body;
+  };
+
+  it('dado um pacote avaliado, quando o schema é pedido, então a medição viaja junto', async () => {
+    // Given — o piso da classe majoritária é o número que impede a
+    // acurácia de significar o que ela não significa
+    const evaluation = {
+      baseline: 0.7,
+      testAccuracy: 0.72,
+      trainAccuracy: 0.7962,
+      auc: 0.7417,
+      testCustomers: 200,
+      confusion: {
+        truePositives: 52, trueNegatives: 73, falsePositives: 67, falseNegatives: 8,
+      },
+      metrics: { precision: 0.437, recall: 0.8667, f1Score: 0.581 },
+      costs: { falsePositive: 1, falseNegative: 5 },
+      thresholds: [{ label: 'Menor custo', threshold: 0.225, cost: 107 }],
+      audit: null,
+    };
+    const body = await servir({ evaluation });
+
+    // Then
+    assert.equal(body.evaluation.baseline, 0.7);
+    assert.equal(body.evaluation.confusion.falseNegatives, 8);
+    assert.deepEqual(body.evaluation.costs, { falsePositive: 1, falseNegative: 5 });
+  });
+
+  it('dado um pacote sem avaliação, quando pedido, então devolve null sem quebrar', async () => {
+    // Given — pacote antigo não é erro; a tela precisa saber distinguir
+    assert.equal((await servir({})).evaluation, null);
+  });
+
+  it('dado um limiar infinito entre os candidatos, quando gravado, então vira null', async () => {
+    // Given — `Infinity` é um ponto legítimo da ROC (o corte que não
+    // aprova ninguém) e `JSON.stringify` o transforma em `null`. Gravar
+    // `null` de propósito é melhor do que gravar um número falso.
+    const body = await servir({
+      evaluation: { thresholds: [{ label: 'Padrão', threshold: null, cost: 300 }] },
+    });
+
+    assert.equal(body.evaluation.thresholds[0].threshold, null);
+  });
+});
+
+describe('GET /schema — o bloco de treino', () => {
+  const pacote = (training) => ({
+    metadata: {
+      source: 'synthetic',
+      encoding: 'raw',
+      threshold: 0.3,
+      featureNames: SYNTHETIC_SOURCE.featureNames,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      ...(training === undefined ? {} : { training }),
+    },
+    source: SYNTHETIC_SOURCE,
+    predict: () => 0.5,
+  });
+
+  const pedirSchema = async (artifacts) => {
+    const server = createApi(artifacts, null);
+    const url = `http://localhost:${await listen(server, 0)}/schema`;
+    const body = await (await fetch(url)).json();
+
+    await new Promise((resolve) => server.close(resolve));
+
+    return body;
+  };
+
+  it('dado um pacote com histórico, quando o schema é pedido, então a curva viaja inteira', async () => {
+    // Given — é a curva REAL do treino; sem ela, o laço entre treinamento
+    // e validação só existiria como afirmação na documentação
+    const history = { loss: [0.75, 0.6, 0.55], valLoss: [0.64, 0.58, 0.59] };
+    const body = await pedirSchema(pacote({
+      customers: 800, units: [16, 8], epochs: 40, batchSize: 32,
+      validationSplit: 0.2, patience: 5, history,
+    }));
+
+    // Then
+    assert.deepEqual(body.training.history, history);
+    assert.equal(body.training.patience, 5);
+    assert.equal(body.training.batchSize, 32);
+  });
+
+  it('dado um pacote salvo antes do histórico, quando pedido, então o bloco vem sem ele', async () => {
+    // Given — um pacote antigo não é um erro: é um pacote antigo, e quem
+    // consome precisa conseguir distinguir "não treinou" de "não gravou"
+    const body = await pedirSchema(pacote({ customers: 800, units: [16, 8] }));
+
+    // Then
+    assert.equal(body.training.history, undefined);
+    assert.equal(body.training.customers, 800);
+  });
+
+  it('dado um pacote sem bloco de treino, quando pedido, então devolve null sem quebrar', async () => {
+    // Given / When / Then
+    assert.equal((await pedirSchema(pacote(undefined))).training, null);
+  });
+});

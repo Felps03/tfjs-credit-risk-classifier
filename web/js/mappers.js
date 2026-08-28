@@ -236,6 +236,252 @@ export const toDecision = ({ classification, threshold }, schema) => ({
     : 'A probabilidade ficou abaixo do limiar, então o contrato segue.',
 });
 
+// --------------------------------------------------
+// Modo treinamento
+// --------------------------------------------------
+// Tudo aqui sai do pacote gravado por `npm start`. A curva é a curva
+// daquele treino, não uma curva bonita desenhada para ilustrar: os
+// números vêm do `history` que o `model.fit` devolveu, época por época.
+//
+// A ANIMAÇÃO da rede é outra coisa, e a tela diz isso: ela é um esquema
+// do algoritmo — passo à frente, erro, passo atrás, ajuste. Não há
+// registro dos pesos época a época, então fingir que os círculos mostram
+// os pesos mudando seria inventar. O que se anima é o PROCEDIMENTO; o
+// que se mede é a curva ao lado.
+
+// Parâmetros de uma MLP densa: cada camada tem pesos (entrada × saída)
+// mais um viés por unidade. Calculado aqui em vez de publicado porque é
+// determinado pela topologia, e uma conta que se refaz não desatualiza.
+export const countParams = (features, units = []) => {
+  const camadas = [features, ...units, 1];
+
+  return camadas
+    .slice(1)
+    .reduce((total, saida, index) => total + camadas[index] * saida + saida, 0);
+};
+
+const inteiro = new Intl.NumberFormat('pt-BR');
+
+export const toTraining = (schema) => {
+  const training = schema.training ?? null;
+  const loss = training?.history?.loss ?? [];
+  const valLoss = training?.history?.valLoss ?? [];
+
+  // Pacote salvo antes de o histórico existir. Não é erro: é um pacote
+  // antigo, e a tela precisa dizer isso em vez de desenhar uma curva
+  // vazia como se fosse uma curva plana.
+  if (loss.length === 0) {
+    return null;
+  }
+
+  const epochs = loss.length;
+  const melhor = valLoss.indexOf(Math.min(...valLoss));
+  const validacao = Math.round(training.customers * (training.validationSplit ?? 0));
+  const ajuste = training.customers - validacao;
+
+  return {
+    epochs,
+    loss,
+    valLoss,
+
+    // A época em que a validação foi melhor, e a última que rodou. A
+    // distância entre as duas é exatamente a paciência do early stopping
+    // — é ali que dá para VER por que o treino parou.
+    best: melhor,
+    limit: training.epochs,
+    patience: training.patience,
+    interrompido: epochs < training.epochs,
+
+    facts: [
+      {
+        id: 'clientes',
+        icon: 'users',
+        label: `${inteiro.format(training.customers)} clientes de treino`,
+        detail: `${inteiro.format(ajuste)} para ajustar os pesos, `
+          + `${inteiro.format(validacao)} separados para validar`,
+      },
+      {
+        id: 'topologia',
+        icon: 'layers',
+        label: `${schema.model.features} → ${(training.units ?? []).join(' → ')} → 1`,
+        detail: `${inteiro.format(countParams(schema.model.features, training.units))} `
+          + 'parâmetros para ajustar',
+      },
+      {
+        id: 'lote',
+        icon: 'gauge',
+        label: `Lotes de ${training.batchSize}`,
+        detail: 'os pesos são corrigidos a cada lote, não a cada cliente',
+      },
+      {
+        id: 'freios',
+        icon: 'shield',
+        label: `L2 ${training.l2} · dropout ${training.dropout}`,
+        detail: 'os dois freios contra decorar o treino',
+      },
+      {
+        id: 'parada',
+        icon: 'clock',
+        label: `Parou na época ${epochs} de ${training.limit ?? training.epochs}`,
+        detail: `a validação não melhorava havia ${training.patience} épocas`,
+      },
+    ],
+  };
+};
+
+// Os quatro números que resumem o pacote servido. Todos saem do
+// contrato: nenhum é digitado, e um retreino que mude a topologia muda a
+// faixa sozinho.
+export const toStats = (schema) => {
+  const training = schema.training ?? {};
+  const epocas = training.history?.loss?.length ?? null;
+
+  return [
+    { id: 'entradas', valor: String(schema.model.features), rotulo: 'entradas na rede' },
+    {
+      id: 'parametros',
+      valor: inteiro.format(countParams(schema.model.features, schema.model.units)),
+      rotulo: 'parâmetros ajustados',
+    },
+    epocas
+      ? { id: 'epocas', valor: String(epocas), rotulo: 'épocas até parar' }
+      : null,
+    {
+      id: 'limiar',
+      valor: `${(schema.threshold * 100).toFixed(1).replace('.', ',')}%`,
+      rotulo: 'limiar de decisão',
+    },
+  ].filter(Boolean);
+};
+
+// --------------------------------------------------
+// Modo avaliação
+// --------------------------------------------------
+// O que o modelo VALE, medido no conjunto de teste. Tudo vem do pacote:
+// nenhum número aqui é recalculado no navegador, porque recalcular
+// exigiria os dados de teste — e eles não saem do servidor.
+export const toEvaluation = (schema) => {
+  const avaliacao = schema.evaluation ?? null;
+
+  if (!avaliacao) {
+    return null;
+  }
+
+  const { confusion, metrics, audit } = avaliacao;
+
+  // Qual dos três cortes é o que está decidindo. A comparação é por
+  // tolerância porque o limiar do pacote tem seis casas e os candidatos
+  // têm quatro — comparar por igualdade não acharia nenhum.
+  const thresholds = (avaliacao.thresholds ?? []).map((corte) => ({
+    ...corte,
+    ativo: corte.threshold !== null
+      && Math.abs(corte.threshold - schema.threshold) < 5e-4,
+  }));
+
+  return {
+    accuracy: avaliacao.testAccuracy,
+    baseline: avaliacao.baseline,
+    auc: avaliacao.auc,
+
+    // O termômetro do overfitting: quanto ele vai melhor no que já viu.
+    gap: avaliacao.trainAccuracy - avaliacao.testAccuracy,
+    testCustomers: avaliacao.testCustomers,
+
+    // A acurácia sozinha não diz nada. `ganho` é o que o treino
+    // acrescentou sobre chutar a classe majoritária — e é ele, não a
+    // acurácia, que responde "o modelo aprendeu alguma coisa?".
+    ganho: avaliacao.testAccuracy - avaliacao.baseline,
+
+    metrics,
+    costs: avaliacao.costs,
+    thresholds,
+
+    confusion: [
+      {
+        id: 'tn',
+        valor: confusion.trueNegatives,
+        sigla: 'TN',
+        titulo: 'Acertou o bom pagador',
+        real: 'Real BAIXO', predito: 'Predito BAIXO',
+        tom: 'success',
+      },
+      {
+        id: 'fp',
+        valor: confusion.falsePositives,
+        sigla: 'FP',
+        titulo: 'Recusou quem pagaria',
+        real: 'Real BAIXO', predito: 'Predito ALTO',
+        tom: 'warn',
+      },
+      {
+        id: 'fn',
+        valor: confusion.falseNegatives,
+        sigla: 'FN',
+        titulo: 'Deixou passar quem não paga',
+        real: 'Real ALTO', predito: 'Predito BAIXO',
+        tom: 'danger',
+      },
+      {
+        id: 'tp',
+        valor: confusion.truePositives,
+        sigla: 'TP',
+        titulo: 'Pegou o inadimplente',
+        real: 'Real ALTO', predito: 'Predito ALTO',
+        tom: 'success',
+      },
+    ],
+
+    audit: audit ? {
+      politica: audit.politica,
+      approvalRatio: audit.approvalRatio,
+
+      // A regra dos quatro quintos (EEOC): abaixo de 0,80 liga o alerta
+      // de impacto desigual. Não é lei brasileira nem prova de
+      // discriminação — é um termômetro consagrado.
+      dentroDaRegra: audit.approvalRatio >= 0.8,
+      grupos: [
+        { id: 'women', rotulo: 'Mulheres', ...audit.women },
+        { id: 'men', rotulo: 'Homens', ...audit.men },
+      ],
+    } : null,
+  };
+};
+
+// No modo treinamento não há dezenove entradas: o card da esquerda passa
+// a descrever o treino, e o feixe sai dele inteiro. Os pontos das pontas
+// mudam; o miolo — camada a camada — é exatamente o mesmo.
+export const toTrainingConnections = (layers) => {
+  const links = [];
+  const preparo = layers[0];
+  const saida = layers[layers.length - 1];
+
+  preparo.nodes.forEach((node) => {
+    links.push({ from: 'stage:left', to: anchorId.node(preparo.id, node.id) });
+  });
+
+  layers.slice(0, -1).forEach((layer, index) => {
+    layer.nodes.forEach((origem) => {
+      layers[index + 1].nodes.forEach((destino) => {
+        links.push({
+          from: anchorId.node(layer.id, origem.id),
+          to: anchorId.node(layers[index + 1].id, destino.id),
+        });
+      });
+    });
+  });
+
+  saida.nodes.forEach((node) => {
+    links.push({ from: anchorId.node(saida.id, node.id), to: 'stage:right', emphasis: true });
+  });
+
+  return links.map((link, index) => ({
+    ...link,
+    id: `${link.from}->${link.to}`,
+    animated: true,
+    delay: (index % 6) * 0.14,
+  }));
+};
+
 // A função que a página inteira usa: DTOs entram, os dados do componente
 // saem. Nada aqui toca no DOM, e nada aqui faz requisição.
 export const toFlowData = ({ schema, score, customer }) => {

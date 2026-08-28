@@ -16,9 +16,9 @@ const { computeConfusionMatrix, formatConfusionMatrix } = require('./13-confusio
 const { evaluateModel, majorityBaseline } = require('./16a-evaluate');
 const { predictRisk } = require('./12-inference');
 const { computeMetrics, formatMetrics, safeDivide } = require('./14-metrics');
-const { buildModel, fitModel } = require('./10-model');
+const { TRAINING, buildModel, fitModel } = require('./10-model');
 const { loadModel } = require('./11-persistence');
-const { saveArtifacts } = require('./19-artifacts');
+const { round, saveArtifacts } = require('./19-artifacts');
 const { classify } = require('./01-preprocess');
 const { computeRocCurve, formatRocCurve } = require('./15-roc');
 const { shuffle, stratifiedSplitCustomers } = require('./09-split');
@@ -86,7 +86,14 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   console.log(`Regularização: L2 = ${l2}, dropout = ${dropout}`);
   model.summary();
 
-  await fitModel(model, xTrain, yTrain);
+  // O `fit` devolve o histórico por época e ele SEMPRE foi descartado
+  // aqui. Guardá-lo custa alguns kilobytes no pacote e paga por si: é a
+  // única evidência do que aconteceu durante o treino, e sem ela o laço
+  // entre treinamento e validação — o coração do processo — só existe
+  // como afirmação. Com ela, dá para VER a val_loss parar de melhorar
+  // enquanto a loss de treino continua caindo, que é exatamente o que o
+  // early stopping está cortando.
+  const { history } = await fitModel(model, xTrain, yTrain);
 
   // O mesmo modelo avaliado nos dois conjuntos. `evaluate` roda em modo de
   // inferência, então o dropout está DESLIGADO nas duas medidas — é a
@@ -172,15 +179,26 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
 
   const chosen = candidates[2].point;
 
+  // A matriz que vale é a do limiar ESCOLHIDO, não a do 0.5 herdado — e
+  // ela existia só dentro do `console.log`. Vira variável para poder ser
+  // gravada no pacote junto do resto.
+  const confusionEscolhida = computeConfusionMatrix(model, xTest, yTest, chosen.threshold);
+  const metricasEscolhidas = computeMetrics(confusionEscolhida);
+
   console.log('\nMatriz no limiar escolhido', `(${formatThreshold(chosen.threshold)}):`);
-  console.log(formatConfusionMatrix(
-    computeConfusionMatrix(model, xTest, yTest, chosen.threshold),
-  ));
+  console.log(formatConfusionMatrix(confusionEscolhida));
   console.log('');
 
   // ------------------------------------------------
   // Auditoria: a coluna que o modelo NÃO recebeu
   // ------------------------------------------------
+  // A auditoria nasce dentro do `if` e morria lá. Ela é metade do
+  // argumento deste projeto — o modelo não recebe a coluna de sexo, e é
+  // JUSTAMENTE por isso que as decisões dele precisam ser medidas por
+  // grupo depois. Guardá-la no pacote é o que permite mostrá-la sem
+  // reexecutar o treino.
+  let auditoria = null;
+
   if (source.audit) {
     const scores = tf.tidy(() =>
       Array.from(model.predict(xTest).reshape([-1]).dataSync()));
@@ -204,6 +222,8 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
     }));
 
     const active = policies[mitigate ? 1 : 0];
+
+    auditoria = { politica: active.label, ...active.audit };
 
     console.log(
       `Auditoria por sexo — ${active.label.toLowerCase()}`,
@@ -252,6 +272,73 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
       units,
       l2,
       dropout,
+
+      // Os hiperparâmetros que governaram ESTE treino. Eles vivem em
+      // `TRAINING` e nunca saíam de lá; gravá-los no pacote é o que
+      // permite descrever o treino sem abrir o código — e o que denuncia
+      // um pacote treinado com outra configuração.
+      epochs: TRAINING.epochs,
+      batchSize: TRAINING.batchSize,
+      validationSplit: TRAINING.validationSplit,
+      patience: TRAINING.patience,
+
+      // Quatro casas bastam para desenhar uma curva; a precisão cheia do
+      // float só engordaria o arquivo.
+      history: {
+        loss: (history.loss ?? []).map((valor) => round(Number(valor), 4)),
+        valLoss: (history.val_loss ?? []).map((valor) => round(Number(valor), 4)),
+      },
+    },
+
+    // ------------------------------------------------
+    // O que o modelo VALE
+    // ------------------------------------------------
+    // Tudo isto era calculado, impresso e descartado — a mesma sorte que
+    // o histórico de treino teve até pouco tempo atrás. O pacote sabia
+    // decidir e não sabia dizer se decide bem.
+    //
+    // O número que mais importa é o `baseline`: a acurácia de quem chuta
+    // a classe majoritária sem olhar para nada. Uma acurácia de 70,5%
+    // parece boa até aparecer ao lado de um piso de 70,0%, e a distância
+    // entre os dois é tudo que o treino acrescentou. Publicar um sem o
+    // outro é publicar meia verdade.
+    evaluation: {
+      baseline: round(baseline, 4),
+      trainAccuracy: round(trainAccuracy, 4),
+      testAccuracy: round(testAccuracy, 4),
+      testLoss: round(testLoss, 4),
+      testCustomers: testCustomers.length,
+
+      // A AUC resume a curva inteira; a acurácia resume UM ponto dela.
+      auc: round(auc, 4),
+
+      // A matriz e as métricas no limiar que realmente decide.
+      confusion: {
+        truePositives: confusionEscolhida.truePositives,
+        trueNegatives: confusionEscolhida.trueNegatives,
+        falsePositives: confusionEscolhida.falsePositives,
+        falseNegatives: confusionEscolhida.falseNegatives,
+      },
+      metrics: {
+        precision: round(metricasEscolhidas.precision, 4),
+        recall: round(metricasEscolhidas.recall, 4),
+        f1Score: round(metricasEscolhidas.f1Score, 4),
+      },
+
+      costs: { falsePositive: FALSE_POSITIVE_COST, falseNegative: FALSE_NEGATIVE_COST },
+
+      // Os três cortes comparados. `Infinity` é um limiar legítimo da
+      // curva ROC (o corte que não aprova ninguém) e vira `null` no JSON;
+      // gravar `null` de propósito é melhor que gravar um número falso.
+      thresholds: candidates.map(({ label, point }) => ({
+        label,
+        threshold: Number.isFinite(point.threshold) ? round(point.threshold, 4) : null,
+        cost: point.cost,
+        falsePositives: point.falsePositives,
+        falseNegatives: point.falseNegatives,
+      })),
+
+      audit: auditoria,
     },
   });
   console.log('Modelo salvo em:', MODEL_DIR);

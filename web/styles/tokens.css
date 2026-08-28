@@ -56,6 +56,16 @@
   --color-border: var(--slate-200);
   --color-border-strong: var(--slate-300);
 
+  /* Fio de cabelo: a borda que separa sem desenhar uma linha. */
+  --color-hairline: color-mix(in srgb, var(--slate-400) 22%, transparent);
+
+  /* O fundo não é chapado. Um brilho frio muito largo atrás do conteúdo
+     dá aos cards algo de onde se destacar — a diferença entre "branco
+     sobre cinza" e uma superfície. */
+  --page-glow:
+    radial-gradient(1200px 520px at 50% -10%, rgb(2 132 199 / 7%), transparent 70%),
+    radial-gradient(900px 400px at 100% 0%, rgb(14 165 233 / 5%), transparent 65%);
+
   --color-text: var(--slate-800);
   --color-text-muted: var(--slate-500);
   --color-text-subtle: var(--slate-400);
@@ -81,7 +91,8 @@
   --color-node-fill: var(--sky-50);
   --color-node-border: var(--sky-500);
   --color-node-glow: rgb(14 165 233 / 22%);
-  --color-link: var(--slate-300);
+  --color-link: color-mix(in srgb, var(--sky-600) 40%, transparent);
+  --color-link-mid: color-mix(in srgb, var(--sky-500) 62%, transparent);
   --color-link-active: var(--sky-500);
   --color-link-muted: var(--slate-200);
 
@@ -97,12 +108,22 @@
 
   --radius-sm: 6px;
   --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-full: 999px;
 
-  /* Sombra baixa e fria, para o card não descolar do fundo */
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
-  --shadow-md: 0 1px 3px rgb(15 23 42 / 8%), 0 8px 24px -12px rgb(15 23 42 / 14%);
+  /* Sombras em camadas: uma linha de contato bem curta, uma difusão larga
+     e quase invisível. Uma sombra só, com blur grande, deixa o card
+     "flutuando"; duas fazem ele pousar. */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 5%);
+  --shadow-md:
+    0 1px 1px rgb(15 23 42 / 4%),
+    0 4px 12px -4px rgb(15 23 42 / 6%),
+    0 16px 40px -20px rgb(15 23 42 / 12%);
+  --shadow-lg:
+    0 1px 1px rgb(15 23 42 / 5%),
+    0 8px 24px -8px rgb(15 23 42 / 8%),
+    0 32px 64px -32px rgb(15 23 42 / 18%);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
@@ -112,17 +133,29 @@
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
   --text-base: 0.9375rem;
-  --text-lg: 1.0625rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
   --text-xl: 1.375rem;
   --text-2xl: 1.75rem;
 
+  /* O número que a tela inteira existe para produzir. Ele estava em
+     1.06rem — do mesmo tamanho do resto, competindo com rótulos em vez de
+     encerrar o argumento. */
+  --text-display: 2.75rem;
+
   --leading-tight: 1.25;
+  --leading-snug: 1.4;
   --leading-normal: 1.55;
+  --leading-relaxed: 1.65;
 
   --weight-normal: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
 
+  /* Texto grande precisa de menos espaço entre letras, não do mesmo:
+     o espaçamento que dá ar a 11px vira um vão a 44px. */
+  --tracking-tighter: -0.03em;
+  --tracking-tight: -0.015em;
   --tracking-wide: 0.06em;
 
   --dur-fast: 120ms;
@@ -142,6 +175,10 @@
     --color-surface-hover: var(--slate-800);
     --color-border: #1e293b;
     --color-border-strong: #334155;
+    --color-hairline: color-mix(in srgb, var(--slate-400) 16%, transparent);
+    --page-glow:
+      radial-gradient(1200px 520px at 50% -10%, rgb(56 189 248 / 8%), transparent 70%),
+      radial-gradient(900px 400px at 100% 0%, rgb(14 165 233 / 5%), transparent 65%);
 
     --color-text: var(--slate-100);
     --color-text-muted: var(--slate-400);
@@ -165,12 +202,20 @@
     --color-node-fill: rgb(56 189 248 / 10%);
     --color-node-border: var(--sky-400);
     --color-node-glow: rgb(56 189 248 / 26%);
-    --color-link: #334155;
-    --color-link-active: var(--sky-400);
+    --color-link: color-mix(in srgb, var(--sky-400) 26%, transparent);
+    --color-link-mid: color-mix(in srgb, var(--sky-400) 46%, transparent);
+    --color-link-active: var(--sky-300);
     --color-link-muted: #1e293b;
 
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-    --shadow-md: 0 1px 3px rgb(0 0 0 / 45%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+    --shadow-md:
+      0 1px 1px rgb(0 0 0 / 40%),
+      0 4px 12px -4px rgb(0 0 0 / 40%),
+      0 16px 40px -20px rgb(0 0 0 / 60%);
+    --shadow-lg:
+      0 1px 1px rgb(0 0 0 / 45%),
+      0 8px 24px -8px rgb(0 0 0 / 45%),
+      0 32px 64px -32px rgb(0 0 0 / 70%);
   }
 }
 
@@ -183,6 +228,10 @@
   --color-surface-hover: var(--slate-800);
   --color-border: #1e293b;
   --color-border-strong: #334155;
+  --color-hairline: color-mix(in srgb, var(--slate-400) 16%, transparent);
+  --page-glow:
+    radial-gradient(1200px 520px at 50% -10%, rgb(56 189 248 / 8%), transparent 70%),
+    radial-gradient(900px 400px at 100% 0%, rgb(14 165 233 / 5%), transparent 65%);
 
   --color-text: var(--slate-100);
   --color-text-muted: var(--slate-400);
@@ -206,10 +255,18 @@
   --color-node-fill: rgb(56 189 248 / 10%);
   --color-node-border: var(--sky-400);
   --color-node-glow: rgb(56 189 248 / 26%);
-  --color-link: #334155;
-  --color-link-active: var(--sky-400);
+  --color-link: color-mix(in srgb, var(--sky-400) 26%, transparent);
+  --color-link-mid: color-mix(in srgb, var(--sky-400) 46%, transparent);
+  --color-link-active: var(--sky-300);
   --color-link-muted: #1e293b;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-md: 0 1px 3px rgb(0 0 0 / 45%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+  --shadow-md:
+    0 1px 1px rgb(0 0 0 / 40%),
+    0 4px 12px -4px rgb(0 0 0 / 40%),
+    0 16px 40px -20px rgb(0 0 0 / 60%);
+  --shadow-lg:
+    0 1px 1px rgb(0 0 0 / 45%),
+    0 8px 24px -8px rgb(0 0 0 / 45%),
+    0 32px 64px -32px rgb(0 0 0 / 70%);
 }

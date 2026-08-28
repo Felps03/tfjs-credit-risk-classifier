@@ -24,6 +24,31 @@ const SCHEMA = {
     units: [16, 8],
     savedAt: '2026-08-28T02:37:23.428Z',
   },
+  // Curva de mentira, com a forma certa: treino caindo sempre, validação
+  // achatando no fim. Serve para o modo treinamento existir com
+  // `?mock=1`; os valores não são de treino nenhum.
+  training: {
+    customers: 800,
+    units: [16, 8],
+    l2: 0.003,
+    dropout: 0.2,
+    epochs: 40,
+    batchSize: 32,
+    validationSplit: 0.2,
+    patience: 5,
+    history: {
+      loss: [
+        0.7539, 0.7111, 0.689, 0.6697, 0.6522, 0.6467, 0.6338, 0.6203, 0.6233,
+        0.6192, 0.5926, 0.5955, 0.5953, 0.5671, 0.5752, 0.5675, 0.566, 0.5642,
+        0.554, 0.5458, 0.5551, 0.5462, 0.5422, 0.5384, 0.5334,
+      ],
+      valLoss: [
+        0.6407, 0.5809, 0.55, 0.5344, 0.5264, 0.5208, 0.5116, 0.5016, 0.4951,
+        0.4974, 0.4897, 0.4817, 0.4775, 0.467, 0.4667, 0.4629, 0.4645, 0.4596,
+        0.4579, 0.4472, 0.4531, 0.4476, 0.4478, 0.451, 0.4479,
+      ],
+    },
+  },
   request: {
     numeric: [
       'durationMonths', 'creditAmount', 'installmentRate',

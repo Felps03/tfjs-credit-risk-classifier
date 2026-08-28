@@ -6,16 +6,32 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
   background: var(--color-bg);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: var(--leading-normal);
+  letter-spacing: var(--tracking-tight);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Números com a mesma largura em qualquer dígito. Sem isto, uma barra
+     indo de 9,9% para 10,0% empurra o texto ao lado — e a tela inteira
+     treme a cada repontuação. */
+  font-variant-numeric: tabular-nums;
 }
 
 h1, h2, h3, p, ul, ol, figure { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
+
+/* O `display: none` do atributo `hidden` vem da folha do NAVEGADOR, que
+   perde para qualquer regra de classe. `.button { display: inline-flex }`
+   reexibia "Restaurar exemplo" mesmo com `hidden` marcado — o elemento
+   dizia estar escondido e aparecia na tela. */
+[hidden] { display: none !important; }
 
 :focus-visible {
   outline: 2px solid var(--color-accent);
@@ -61,9 +77,9 @@ ul, ol { padding: 0; list-style: none; }
   position: sticky;
   top: 0;
   z-index: 5;
-  border-bottom: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
-  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--color-hairline);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  backdrop-filter: blur(14px) saturate(150%);
 }
 
 .topbar__inner {
@@ -73,23 +89,37 @@ ul, ol { padding: 0; list-style: none; }
   gap: var(--space-4);
   max-width: 1320px;
   margin: 0 auto;
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-4) var(--space-6);
 }
 
 .topbar__identity { display: flex; align-items: center; gap: var(--space-3); }
-.topbar__mark { font-size: var(--text-xl); line-height: 1; }
+.topbar__names { display: flex; flex-direction: column; gap: 1px; }
+
+.topbar__mark {
+  display: grid;
+  place-items: center;
+  width: 34px; height: 34px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-accent);
+}
+
+.topbar__mark svg { width: 22px; height: 22px; }
 
 .topbar__title {
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-tight);
 }
 
 .topbar__subtitle {
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  text-transform: lowercase;
-  letter-spacing: var(--tracking-wide);
+  line-height: 1.3;
+  color: var(--color-text-subtle);
+  letter-spacing: 0;
 }
 
 .topbar__actions { display: flex; align-items: center; gap: var(--space-2); }
@@ -98,9 +128,20 @@ ul, ol { padding: 0; list-style: none; }
    empurrando os botões contra a borda. O subtítulo é a primeira coisa a
    sair: ele repete o que a página inteira mostra logo abaixo. */
 @media (max-width: 600px) {
-  .topbar__inner { padding: var(--space-3) var(--space-4); }
+  .topbar__inner { flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); }
   .topbar__subtitle { display: none; }
   .topbar__mark { align-self: flex-start; }
+
+  /* Com TRÊS modos, o seletor sozinho já não cabe ao lado dos botões:
+     "Análise / Treinamento / Avaliação" mais "Reprocessar" mais o tema
+     davam 444px em uma tela de 390.
+     `display: contents` dissolve o contêiner das ações e deixa os três
+     filhos serem itens do mesmo flex do topo — só assim dá para mandar o
+     seletor para a linha de baixo e manter os botões ao lado do título. */
+  .topbar__identity { flex: 1; min-width: 0; }
+  .topbar__actions { display: contents; }
+  .segmented { order: 3; width: 100%; }
+  .segmented__option { flex: 1; }
 }
 
 .button {
@@ -108,20 +149,26 @@ ul, ol { padding: 0; list-style: none; }
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 var(--space-4);
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
   color: var(--color-text);
   font: inherit;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
 
-.button:hover { background: var(--color-surface-hover); border-color: var(--color-accent-border); }
+.button:hover { background: var(--color-surface-hover); border-color: var(--color-border-strong); }
+.button:active { transform: translateY(0.5px); }
 
 .button--primary {
   border-color: transparent;
@@ -131,8 +178,39 @@ ul, ol { padding: 0; list-style: none; }
 
 .button--primary:hover { background: var(--color-accent-hover); }
 
-.button--icon { width: 34px; padding: 0; }
+.button--icon { width: 36px; padding: 0; }
 .button--icon svg { width: 16px; height: 16px; }
+
+/* Seletor de modo */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.segmented__option {
+  padding: 0 var(--space-4);
+  min-height: 30px;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.segmented__option:hover { color: var(--color-text); }
+
+.segmented__option[aria-checked="true"] {
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text);
+}
 
 /* --------------------------------------------------
    Página
@@ -141,14 +219,87 @@ ul, ol { padding: 0; list-style: none; }
 .page {
   max-width: 1320px;
   margin: 0 auto;
-  padding: var(--space-6) var(--space-5) var(--space-8);
+  padding: var(--space-7) var(--space-6) var(--space-8);
+}
+
+.page__intro {
+  max-width: 62ch;
+  margin-bottom: var(--space-5);
+}
+
+/* Os quatro números que resumem o pacote. A metade direita da abertura
+   era espaço morto; agora ela carrega o que o texto ao lado descreve. */
+.page__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  margin-bottom: var(--space-7);
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-hairline);
+}
+
+/* Os cartões encostam e o `gap` de 1px sobre o fundo da grade vira a
+   linha divisória — sem borda em cada um, que somaria duas. */
+.stat {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  animation: sobe 620ms var(--ease-out) both;
+  animation-delay: calc(var(--ordem, 0) * 70ms);
+}
+
+.stat__label {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.stat__value {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tighter);
+  line-height: 1.1;
+}
+
+@keyframes sobe {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.page__kicker,
+.page__headline,
+.page__lead { animation: sobe 620ms var(--ease-out) both; }
+
+.page__headline { animation-delay: 60ms; }
+.page__lead { animation-delay: 120ms; }
+
+.page__kicker {
+  margin-bottom: var(--space-2);
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.page__headline {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tighter);
+  text-wrap: balance;
 }
 
 .page__lead {
-  max-width: 68ch;
-  margin-bottom: var(--space-6);
+  max-width: 62ch;
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
 }
 
 /* --------------------------------------------------
@@ -165,7 +316,22 @@ ul, ol { padding: 0; list-style: none; }
 /* As colunas ficam acima do SVG para que os cards sejam opacos e as
    ligações pareçam sair da borda deles — menos o painel da rede, que é
    transparente de propósito: é ali que as ligações precisam aparecer. */
-.flow__stage { position: relative; z-index: 1; min-width: 0; }
+.flow__stage {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  animation: sobe 700ms var(--ease-out) both;
+}
+
+/* As colunas entram na ordem em que se leem. Não é decoração: entrando
+   juntas, a tela aparece pronta e nada indica por onde começar. */
+.flow__stage--inputs { animation-delay: 60ms; }
+.flow__stage--network { animation-delay: 150ms; }
+.flow__stage--results { animation-delay: 240ms; }
+
+/* Um custom element sem `display` é `inline`. Nenhum dos dois abaixo
+   deveria depender disso para calcular largura. */
+data-processing-flow { display: block; }
 
 flow-connections {
   position: absolute;
@@ -177,7 +343,10 @@ flow-connections {
 
 @media (min-width: 1024px) {
   .flow {
-    grid-template-columns: minmax(250px, 344px) minmax(0, 1fr) minmax(250px, 330px);
+    /* O card ganhou padding no passe de acabamento e comeu a largura do
+       rótulo: "Histórico de crédito" voltou a quebrar em duas linhas.
+       A coluna do meio tinha folga de sobra para ceder 20px. */
+    grid-template-columns: minmax(250px, 364px) minmax(0, 1fr) minmax(250px, 330px);
     gap: var(--space-7);
     align-items: start;
   }
@@ -189,19 +358,53 @@ flow-connections {
    Cards
    -------------------------------------------------- */
 
+/* Anel em gradiente em vez de borda chapada: a moldura é mais clara em
+   cima e some embaixo, como uma superfície pegando luz de cima. Feito com
+   duas camadas de fundo — uma no `padding-box` (a superfície) e outra no
+   `border-box` (o anel) — porque `border-image` não acompanha o raio. */
 .panel {
   position: relative;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
+  padding: var(--space-5);
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  background:
+    linear-gradient(var(--color-surface), var(--color-surface)) padding-box,
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-text) 14%, transparent),
+      var(--color-hairline) 55%
+    ) border-box;
   box-shadow: var(--shadow-md);
 }
 
-/* Sem fundo: as ligações precisam atravessar esta área. */
-.network-panel { position: relative; }
+/* Um risco de luz na aresta de cima, dentro do card. É o detalhe que faz
+   a superfície parecer material em vez de retângulo pintado. */
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 0; left: var(--space-5); right: var(--space-5);
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-surface-hover) 100%, white 60%),
+    transparent
+  );
+  opacity: 0.7;
+  pointer-events: none;
+}
 
-.panel__header { margin-bottom: var(--space-4); }
+/* Sem fundo: as ligações precisam atravessar esta área — e sem a linha
+   do cabeçalho, que sem card atrás ficaria solta no ar. */
+.network-panel { position: relative; }
+.network-panel .panel__header { border-bottom: 0; padding-bottom: 0; }
+
+.panel__header {
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
 .panel__header--center { text-align: center; }
 
 .panel__header--row {
@@ -212,35 +415,42 @@ flow-connections {
 }
 
 .button--ghost {
+  flex: none;
   min-height: 26px;
   padding: 0 var(--space-2);
   border-color: transparent;
   background: transparent;
+  box-shadow: none;
   color: var(--color-accent);
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 .button--ghost:hover { background: var(--color-accent-soft); border-color: transparent; }
 
+/* Caixa alta com espaçamento largo lê como painel de administração de
+   2015. Caixa de frase, um pouco maior, lê como um documento — que é o
+   que esta tela é. */
 .panel__title {
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
   color: var(--color-text);
 }
 
 .panel__subtitle {
   margin-top: var(--space-1);
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  line-height: var(--leading-snug);
+  color: var(--color-text-subtle);
 }
 
 /* --------------------------------------------------
    Entradas
    -------------------------------------------------- */
 
-.input-list { display: flex; flex-direction: column; gap: 1px; }
+.input-list { display: flex; flex-direction: column; gap: 3px; }
 
 .input-item {
   position: relative;
@@ -253,17 +463,23 @@ flow-connections {
 }
 
 .input-item:hover { background: var(--color-surface-hover); }
+.input-item:focus-within { background: var(--color-surface-hover); }
 
 .input-item__icon {
   display: grid;
   place-items: center;
   flex: none;
   width: 22px; height: 22px;
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-surface-sunken);
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
+  transition: color var(--dur-fast) var(--ease);
 }
+
+/* O ícone acende com a linha. Uma caixa desenhada em volta de cada um dos
+   dezenove ícones vira uma grade de caixinhas; sem ela, a lista respira e
+   o ícone continua orientando a leitura. */
+.input-item:hover .input-item__icon,
+.input-item:focus-within .input-item__icon { color: var(--color-accent); }
 
 .input-item__icon svg { width: 13px; height: 13px; }
 
@@ -293,26 +509,35 @@ flow-connections {
 
 .field {
   min-width: 0;
-  padding: 3px var(--space-2);
-  border: 1px solid var(--color-border-strong);
+  padding: 4px var(--space-2);
+  border: 1px solid var(--color-hairline);
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  background: var(--color-surface-sunken);
   color: var(--color-text);
   font: inherit;
   font-size: var(--text-xs);
-  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
-.field:hover { border-color: var(--color-accent-border); }
+.field:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+}
 
+/* Anel em vez de contorno duplo: uma borda de acento mais um halo suave
+   marca o foco sem o traço grosso do outline padrão. */
 .field:focus-visible {
   border-color: var(--color-accent);
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  background: var(--color-surface);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 .field--number {
-  width: 66px;
+  width: 62px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -322,25 +547,47 @@ flow-connections {
    longa, então "sim/não" ficava com metade da largura de "gestão /
    autônomo qualificado" — doze controles terminando em doze lugares
    diferentes. O texto que não cabe continua inteiro na lista aberta. */
-.field--select { width: 124px; }
+.field--select { width: 112px; }
 
+/* A coluna da unidade existe em TODAS as linhas, mesmo vazia, para os
+   dezenove controles terminarem no mesmo x. Ela é estreita de propósito:
+   cada pixel aqui sai do rótulo, e é o rótulo que quebra em duas linhas
+   quando falta espaço. */
 .field__suffix {
   flex: none;
-  width: 34px;
+  width: 29px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
 }
 
-/* A faixa vista no treino e o erro dividem a mesma terceira linha: nunca
-   aparecem juntos, e reservar duas linhas deixaria um buraco em 19 itens. */
+/* Fora do fluxo, e não numa terceira linha. Reservada, a dica custava
+   15px em CADA um dos sete campos numéricos — 105px de card para um texto
+   que só aparece com o campo em foco. Sobreposta, ela aparece onde o olho
+   já está e some sem deixar buraco. */
 .input-item__faixa,
 .input-item__erro {
-  flex-basis: 100%;
-  padding-left: 30px;
+  position: absolute;
+  right: var(--space-2);
+  bottom: -8px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
   font-size: var(--text-xs);
   line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
 }
+
+/* A dica flutua sobre a borda entre duas linhas. `z-index` dentro do item
+   não bastava: cada `.input-item` abre seu próprio contexto de empilhamento
+   e o item SEGUINTE pinta por cima, então a dica sumia atrás dele. Quem
+   precisa subir é a linha inteira. */
+.input-item:focus-within,
+.input-item[data-fora-da-faixa="true"],
+.input-item[data-invalid="true"] { z-index: 3; }
 
 .input-item__faixa {
   color: var(--color-text-subtle);
@@ -348,12 +595,20 @@ flow-connections {
   transition: opacity var(--dur-fast) var(--ease);
 }
 
+/* As duas ocupam o mesmo lugar. Quando o campo está inválido, quem fala é
+   o erro — a faixa do treino não ajuda quem ainda não digitou um número. */
+.input-item[data-invalid="true"] .input-item__faixa { opacity: 0 !important; }
+
 /* Ela só aparece quando é útil: com o campo em foco, ou quando o valor
    saiu da faixa. Visível o tempo todo em 7 campos, viraria ruído. */
 .input-item:focus-within .input-item__faixa,
 .input-item[data-fora-da-faixa="true"] .input-item__faixa { opacity: 1; }
 
 .input-item__erro { color: var(--color-warn); }
+
+/* Sem conteúdo não há mensagem — e com borda, fundo e padding o span
+   vazio virava uma pílula minúscula flutuando ao lado de cada linha. */
+.input-item__erro:empty { display: none; }
 
 .input-item[data-invalid="true"] .field { border-color: var(--color-warn); }
 
@@ -442,6 +697,11 @@ flow-connections {
   font-weight: var(--weight-semibold);
   color: var(--color-text);
   text-align: center;
+
+  /* "Camada oculta 1" quebrando em "Camada oculta" + "1" desalinha as
+     quatro colunas entre si — e o nome da etapa é curto o bastante para
+     nunca precisar de duas linhas. */
+  white-space: nowrap;
 }
 
 .network__layer-caption {
@@ -480,19 +740,56 @@ flow-connections {
   max-width: 100%;
 }
 
+/* O nó era um círculo de 13px com borda fina — o elemento central da
+   tela era a coisa mais apagada dela. Agora tem corpo: anel externo
+   suave, preenchimento com brilho no topo e halo. */
 .node {
-  width: 13px; height: 13px;
+  position: relative;
+  width: 17px; height: 17px;
   border: 2px solid var(--color-node-border);
   border-radius: var(--radius-full);
-  background: var(--color-node-fill);
-  box-shadow: 0 0 10px -1px var(--color-node-glow);
+  background:
+    radial-gradient(circle at 35% 28%,
+      color-mix(in srgb, var(--color-node-border) 45%, transparent),
+      var(--color-node-fill) 70%);
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--color-node-border) 10%, transparent),
+    0 0 18px -2px var(--color-node-glow);
   cursor: default;
-  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  animation: node-entra 520ms var(--ease-out) both;
+  animation-delay: calc(var(--ordem, 0) * 45ms + 180ms);
+  transition:
+    transform var(--dur-base) var(--ease),
+    box-shadow var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease);
+}
+
+@keyframes node-entra {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .node:hover, .node:focus-visible {
-  transform: scale(1.3);
-  box-shadow: 0 0 14px 0 var(--color-node-glow);
+  transform: scale(1.35);
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--color-node-border) 16%, transparent),
+    0 0 26px 0 var(--color-node-glow);
+}
+
+/* O nó em que o campo rastreado desemboca. */
+flow-network.is-tracing .node-slot:not(.is-traced) .node { opacity: 0.3; }
+flow-network.is-tracing .node-slot:not(.is-traced) .node__caption { opacity: 0.35; }
+
+.node-slot.is-traced .node {
+  transform: scale(1.4);
+  border-color: var(--color-link-active);
+  box-shadow:
+    0 0 0 8px color-mix(in srgb, var(--color-link-active) 18%, transparent),
+    0 0 30px 0 var(--color-node-glow);
+}
+
+.node-slot .node, .node-slot .node__caption {
+  transition: opacity var(--dur-base) var(--ease), transform var(--dur-base) var(--ease);
 }
 
 .node__caption {
@@ -582,9 +879,36 @@ flow-connections {
 
 .link {
   fill: none;
-  stroke: var(--color-link);
-  stroke-width: 1;
+  stroke: url(#fluxo-ligacao);
+  stroke-width: 1.5;
+  transition: opacity var(--dur-base) var(--ease), stroke-width var(--dur-base) var(--ease);
 }
+
+/* O traçado de entrada: cada ligação se DESENHA da origem ao destino, e
+   o atraso cresce com a posição horizontal — a rede aparece varrendo da
+   entrada para a saída, na mesma direção em que o dado anda. */
+.connections.is-entering .link {
+  stroke-dasharray: var(--len) var(--len);
+  stroke-dashoffset: var(--len);
+  animation: link-desenha 820ms var(--ease-out) both;
+  animation-delay: var(--enter, 0ms);
+}
+
+@keyframes link-desenha {
+  to { stroke-dashoffset: 0; }
+}
+
+/* Rastro de um campo: o caminho dele acende, o resto recua. */
+.connections.is-tracing .link { opacity: 0.16; }
+.connections.is-tracing .link-flow { opacity: 0.1; }
+
+.connections.is-tracing .link.is-traced {
+  opacity: 1;
+  stroke: var(--color-link-active);
+  stroke-width: 2.2;
+}
+
+.connections.is-tracing .link-flow.is-traced { opacity: 1; }
 
 /* Saída → resultado: a única parte do caminho que carrega o número, e a
    única que ganha a cor de acento. */
@@ -626,7 +950,7 @@ flow-connections {
 
 .panel--results { display: flex; flex-direction: column; gap: var(--space-4); }
 
-.result-list { display: flex; flex-direction: column; gap: var(--space-5); }
+.result-list { display: flex; flex-direction: column; gap: var(--space-6); }
 
 .result {
   position: relative;
@@ -639,35 +963,51 @@ flow-connections {
 .result[data-tone="success"] { --tone: var(--color-success); }
 .result[data-tone="accent"] { --tone: var(--color-accent); }
 
-.result__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
+.result__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
 }
 
-.result__label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
-
 .result__value {
-  font-family: var(--font-mono);
   font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: var(--tracking-tight);
   color: var(--tone);
+}
+
+/* O primeiro resultado é a resposta da rede; o segundo é o complemento
+   dele. Do mesmo tamanho, os dois pareciam duas medidas independentes —
+   e a tela perdia o desfecho no meio de si mesma. */
+.result:first-child .result__value {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-display);
+  letter-spacing: var(--tracking-tighter);
 }
 
 .result__track {
   position: relative;
-  height: 9px;
-  border: 1px solid var(--color-border);
+  height: 10px;
   border-radius: var(--radius-full);
   background: var(--color-surface-sunken);
+
+  /* Sulco em vez de caixa: a sombra interna afunda a trilha no card, e a
+     barra passa a preencher um vão em vez de cobrir um retângulo. */
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 8%), inset 0 0 0 1px var(--color-hairline);
 }
 
 .result__bar {
   width: 0;
   height: 100%;
   border-radius: var(--radius-full);
-  background: var(--tone);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--tone) 78%, transparent),
+    var(--tone)
+  );
+  box-shadow: 0 1px 3px -1px color-mix(in srgb, var(--tone) 55%, transparent);
   transition: width var(--dur-slow) var(--ease-out);
 }
 
@@ -704,10 +1044,12 @@ flow-connections {
    para ver de que lado a probabilidade caiu sem ler nada. */
 .result__marker {
   position: absolute;
-  top: -5px; bottom: -5px;
+  top: -6px; bottom: -6px;
   left: var(--at);
-  width: 0;
-  border-left: 2px dashed var(--color-text-muted);
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-text);
+  opacity: 0.55;
 }
 
 .result__marker-label {
@@ -730,7 +1072,8 @@ flow-connections {
 .result__description {
   margin-top: var(--space-3);
   font-size: var(--text-xs);
-  color: var(--color-text-muted);
+  line-height: var(--leading-snug);
+  color: var(--color-text-subtle);
 }
 
 .result:has(.result__marker) .result__description { margin-top: var(--space-5); }
@@ -738,7 +1081,7 @@ flow-connections {
 .verdict {
   display: flex;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid var(--tone-border);
   border-radius: var(--radius-md);
   background: var(--tone-bg);
@@ -758,8 +1101,19 @@ flow-connections {
 
 .verdict__icon { flex: none; color: var(--tone-fg); }
 .verdict__icon svg { width: 18px; height: 18px; }
-.verdict__label { color: var(--tone-fg); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
-.verdict__text { margin-top: 2px; color: var(--tone-fg); font-size: var(--text-xs); opacity: 0.9; }
+.verdict__label {
+  color: var(--tone-fg);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+.verdict__text {
+  margin-top: var(--space-1);
+  color: var(--tone-fg);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  opacity: 0.85;
+}
 
 /* --------------------------------------------------
    Rodapé de contexto
@@ -778,6 +1132,448 @@ flow-connections {
 
 .flow-meta__item { display: inline-flex; align-items: center; gap: var(--space-2); }
 .flow-meta__item + .flow-meta__item::before { content: ""; }
+
+/* --------------------------------------------------
+   Modo treinamento
+   -------------------------------------------------- */
+
+/* No treino a coluna da esquerda tem cinco fatos, não dezenove campos —
+   ela encolhe pela metade, e uma rede dimensionada para o card alto
+   ficaria boiando muito abaixo dele. */
+@media (min-width: 1024px) {
+  .flow[data-mode="treinamento"] .network { min-height: 330px; }
+}
+
+.training-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.phase-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Os quatro passos ficam SEMPRE visíveis, e não só o atual: é a
+   sequência que ensina, não o instante. O destaque diz onde o laço
+   está agora. */
+.phase {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  transition:
+    background var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease),
+    box-shadow var(--dur-base) var(--ease);
+}
+
+.phase[data-active="true"] {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.phase__label {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.phase[data-active="true"] .phase__label { color: var(--color-accent-text); }
+
+.phase__detail {
+  display: block;
+  max-width: 24ch;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+/* Sem `wrap`, a linha de controles tem um min-content de ~360px (botão +
+   barra + rótulo) e é ELA que decide a largura do card — que passa a
+   estourar a tela em 390px por uma fração de pixel difícil de rastrear.
+   Deixar quebrar resolve na origem. */
+.training-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.epoch-range {
+  flex: 1;
+  min-width: 120px;
+  max-width: 200px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.epoch-readout {
+  min-width: 13ch;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Fatos do treino */
+.fact-list { display: flex; flex-direction: column; gap: var(--space-4); }
+.fact { display: flex; gap: var(--space-3); }
+
+.fact__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px; height: 30px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.fact__icon svg { width: 15px; height: 15px; }
+.fact__label {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+}
+
+.fact__detail {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+/* A curva */
+.panel--chart { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.chart { width: 100%; height: auto; overflow: visible; }
+.chart__axis { stroke: var(--color-border-strong); stroke-width: 1; }
+
+.chart__line {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart__line--treino { stroke: var(--color-accent); }
+.chart__line--validacao { stroke: var(--color-warn); }
+
+.chart__best {
+  stroke: var(--color-success);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart__best-label { fill: var(--color-success); font-size: 9px; }
+.chart__tick { fill: var(--color-text-subtle); font-size: 9px; }
+
+.chart__marker line { stroke: var(--color-text-muted); stroke-width: 1; opacity: 0.45; }
+.chart__marker { transition: transform var(--dur-base) var(--ease); }
+.chart__dot--treino { fill: var(--color-accent); }
+.chart__dot--validacao { fill: var(--color-warn); }
+
+.chart__legend { display: flex; gap: var(--space-4); }
+
+.chart__key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.chart__key::before {
+  content: "";
+  width: 14px; height: 2px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.chart__key--treino::before { background: var(--color-accent); }
+.chart__key--validacao::before { background: var(--color-warn); }
+
+.chart__reading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.chart__reading-item { color: var(--color-text-muted); }
+.chart__reading-item--treino { color: var(--color-accent); }
+.chart__reading-item--validacao { color: var(--color-warn); }
+
+.chart__note {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.panel__empty { color: var(--color-text-muted); font-size: var(--text-sm); }
+
+/* Âncoras do modo treinamento: o card inteiro é uma ponta só. */
+.anchor--stage { display: block; }
+.anchor--stage-out { top: 50%; right: -4px; transform: translate(50%, -50%); }
+.anchor--stage-in { top: 50%; left: -4px; transform: translate(-50%, -50%); }
+
+@media (max-width: 1023px) {
+  .anchor--stage-out { top: auto; right: 50%; bottom: -4px; transform: translate(50%, 50%); }
+  .anchor--stage-in { top: -4px; left: 50%; transform: translate(-50%, -50%); }
+  .training-bar { flex-direction: column; align-items: stretch; }
+  .phase__detail { max-width: none; }
+}
+
+/* A retropropagação: o MESMO traço, percorrido ao contrário. */
+.connections[data-direction="backward"] .link-flow {
+  stroke: var(--color-warn);
+  animation-name: link-fluxo-reverso;
+}
+
+@keyframes link-fluxo-reverso {
+  from { stroke-dashoffset: calc(var(--len, 400px) * -1); }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Os nós reagem à fase. Nada aqui afirma um valor: é o procedimento que
+   está sendo mostrado, e a legenda da coluna diz isso. */
+flow-network[data-phase="erro"] .network__layer:last-child .node {
+  border-color: var(--color-warn);
+  box-shadow: 0 0 16px 0 var(--color-warn);
+}
+
+flow-network[data-phase="ajuste"] .node {
+  transform: scale(1.25);
+  box-shadow: 0 0 16px 0 var(--color-node-glow);
+}
+
+flow-network[data-phase] .node { transition: all var(--dur-base) var(--ease); }
+
+/* --------------------------------------------------
+   Modo avaliação
+   -------------------------------------------------- */
+
+.training-note {
+  flex-basis: 100%;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+
+/* Barra de medida. Usada pela acurácia e pela auditoria com a MESMA
+   escala: é a comparação entre duas barras que carrega o argumento, e
+   escalas diferentes fariam qualquer par parecer o que se quisesse. */
+.gauge {
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 8%), inset 0 0 0 1px var(--color-hairline);
+}
+
+.gauge__fill {
+  width: var(--fill);
+  height: 100%;
+  border-radius: var(--radius-full);
+  animation: gauge-cresce 900ms var(--ease-out) both;
+}
+
+.gauge[data-tone="accent"] .gauge__fill { background: var(--color-accent); }
+.gauge[data-tone="warn"] .gauge__fill { background: var(--color-warn); }
+.gauge[data-tone="muted"] .gauge__fill { background: var(--color-border-strong); }
+
+@keyframes gauge-cresce {
+  from { width: 0; }
+  to { width: var(--fill); }
+}
+
+.compare { display: flex; flex-direction: column; gap: var(--space-2); }
+.compare__row { display: flex; align-items: baseline; justify-content: space-between; }
+.compare__row--muted { margin-top: var(--space-3); color: var(--color-text-muted); }
+.compare__label { font-size: var(--text-sm); }
+
+.compare__value {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+}
+
+.compare__row:not(.compare__row--muted) .compare__value {
+  font-size: var(--text-2xl);
+  color: var(--color-accent);
+}
+
+.compare__note {
+  margin-top: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+
+.measure-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-hairline);
+}
+
+.measure__label {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.measure__value {
+  margin-top: var(--space-1);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tighter);
+}
+
+.measure__detail {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+/* A matriz de confusão. Sem card atrás, como a rede: é a coluna do meio. */
+.confusion-panel { position: relative; }
+
+.matrix {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: var(--space-2);
+  align-items: center;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.matrix__head, .matrix__side {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.matrix__head { text-align: center; }
+.matrix__side { text-align: right; }
+
+/* O fundo acompanha a fração de clientes na célula: a matriz vira um
+   mapa de calor sem deixar de ser legível como números. */
+.cell {
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--cell-tone) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--cell-tone) calc(var(--peso) * 22%), transparent);
+  text-align: center;
+  animation: sobe 620ms var(--ease-out) both;
+}
+
+.cell[data-tone="success"] { --cell-tone: var(--color-success); }
+.cell[data-tone="warn"] { --cell-tone: var(--color-warn); }
+.cell[data-tone="danger"] { --cell-tone: #ef4444; }
+
+.cell__value {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tighter);
+  line-height: 1;
+}
+
+.cell__code {
+  margin-top: var(--space-1);
+  color: var(--cell-tone);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.cell__title {
+  margin-top: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+.metric-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-4);
+  max-width: 520px;
+  margin: var(--space-6) auto 0;
+}
+
+.metric__head { display: flex; align-items: baseline; justify-content: space-between; }
+.metric__label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+
+.metric__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  color: var(--color-accent);
+}
+
+.metric__detail {
+  margin-top: var(--space-1);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+/* Auditoria por grupo */
+.group-list { display: flex; flex-direction: column; gap: var(--space-5); }
+.group__head { display: flex; align-items: baseline; justify-content: space-between; }
+.group__label { font-size: var(--text-base); font-weight: var(--weight-medium); }
+.group__n { color: var(--color-text-subtle); font-family: var(--font-mono); font-size: var(--text-xs); }
+
+.group__bars { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+
+.group__bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+}
+
+.group__bar .gauge { grid-column: 1; height: 8px; }
+.group__bar-label { grid-column: 1; color: var(--color-text-subtle); font-size: var(--text-xs); }
+
+.group__bar-value {
+  grid-column: 2; grid-row: 1 / span 2;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.group__note {
+  margin-top: var(--space-2);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+@media (min-width: 1024px) {
+  .flow[data-mode="avaliacao"] .flow__stage--network { padding: 0; }
+}
 
 /* --------------------------------------------------
    Estados

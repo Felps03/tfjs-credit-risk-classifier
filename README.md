@@ -148,7 +148,13 @@ npm run serve                      # http://localhost:3000
 npm run serve -- --port=8080
 ```
 
-O mesmo endereço abre uma **página** que mostra o caminho do dado — os campos que entraram, as etapas que os relacionaram e a probabilidade que saiu. Os 19 campos são **editáveis**: mudar a conta corrente de "saldo negativo" para "200 DM ou mais" repontua o cliente e move as barras na hora. Ela consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
+O mesmo endereço abre uma **página** com dois modos sobre a mesma rede:
+
+- **Análise** — o caminho do dado, dos campos que entraram até a probabilidade que saiu. Os 19 campos são **editáveis**: mudar a conta corrente de "saldo negativo" para "200 DM ou mais" repontua o cliente e move as barras na hora.
+- **Treinamento** — o laço que produziu os pesos, passo a passo, ao lado da **curva real** daquele treino: a perda de treino caindo, a de validação achatando, e o ponto onde o *early stopping* cortou.
+- **Avaliação** — quanto ele acerta **ao lado do piso da classe majoritária**, a matriz de confusão no limiar escolhido, os três cortes candidatos com o preço de cada um, e a auditoria por sexo com a regra dos quatro quintos.
+
+Ela consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
 
 ```bash
 curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{

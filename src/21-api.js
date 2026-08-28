@@ -283,6 +283,19 @@ const createRoutes = (artifacts) => {
           },
           request: describeSchema(schema),
 
+          // Como o modelo foi treinado, e o que aconteceu enquanto ele
+          // era: hiperparâmetros e a curva por época. É o que permite a
+          // uma tela MOSTRAR o treino em vez de descrevê-lo. Pacote
+          // antigo, salvo antes de o histórico ser gravado, devolve o
+          // bloco sem `history` — e quem consome precisa aguentar isso.
+          training: metadata.training ?? null,
+
+          // Quanto o modelo vale, medido no conjunto de teste: acurácia
+          // ao lado do PISO da classe majoritária, matriz no limiar que
+          // realmente decide, AUC, e a auditoria por grupo. Sem isto o
+          // serviço sabe decidir e não sabe dizer se decide bem.
+          evaluation: metadata.evaluation ?? null,
+
           // A faixa vista no treino, por coluna numérica. Quem monta um
           // formulário sobre este contrato descobre daqui o que é um
           // valor plausível — sem precisar abrir o `metadata.json`.

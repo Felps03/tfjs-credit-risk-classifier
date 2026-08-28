@@ -1,4 +1,5 @@
 import { reduzMovimento, svg } from '../dom.js';
+import { anchorId } from '../mappers.js';
 
 // --------------------------------------------------
 // <flow-connections> — as ligações
@@ -77,6 +78,7 @@ export class FlowConnections extends HTMLElement {
     this.observer?.disconnect();
     window.removeEventListener('resize', this.agendar);
     cancelAnimationFrame(this.pendente);
+    clearTimeout(this.fimDaEntrada);
   }
 
   // O container inteiro E cada coluna. Só o container não basta: uma
@@ -95,6 +97,22 @@ export class FlowConnections extends HTMLElement {
   set data(connections) {
     this.connections = connections ?? [];
     this.observar();
+    this.agendar();
+  }
+
+  // A retropropagação é o mesmo caminho, percorrido ao contrário. Não há
+  // um segundo conjunto de curvas: só a animação inverte, porque é
+  // literalmente isso que acontece — o erro volta pelas MESMAS ligações
+  // por onde o dado veio.
+  set direction(valor) {
+    this.canvas?.setAttribute('data-direction', valor === 'backward' ? 'backward' : 'forward');
+  }
+
+  // No modo treinamento todas as ligações pulsam. Em uma a cada cinco, o
+  // que se vê é um gotejamento; o treino é o momento em que a rede toda
+  // está sendo percorrida de uma vez, e a imagem tem que dizer isso.
+  set animateAll(valor) {
+    this.todas = Boolean(valor);
     this.agendar();
   }
 
@@ -160,7 +178,19 @@ export class FlowConnections extends HTMLElement {
       desenhadas.add(chave);
 
       const d = curva(origem, destino);
-      const path = svg('path', { class: 'link', d });
+      const path = svg('path', {
+        class: 'link',
+        d,
+
+        // A ponta de origem fica no atributo para que iluminar o caminho
+        // de UM campo seja uma consulta no DOM, e não um segundo desenho.
+        'data-from': link.from,
+
+        // O atraso do desenho de entrada cresce com a posição horizontal:
+        // as ligações aparecem varrendo da entrada para a saída, na mesma
+        // direção em que o dado anda. Espalhar por sorteio faria pipoca.
+        'data-enter': (origem.x / hostRect.width).toFixed(3),
+      });
 
       if (link.emphasis) {
         path.classList.add('link--emphasis');
@@ -168,12 +198,36 @@ export class FlowConnections extends HTMLElement {
 
       paths.push(path);
 
-      if (anima && link.animated) {
-        paths.push(svg('path', { class: 'link-flow', d, 'data-delay': link.delay ?? 0 }));
+      if (anima && (this.todas || link.animated)) {
+        paths.push(svg('path', {
+          class: 'link-flow',
+          d,
+          'data-from': link.from,
+          'data-delay': link.delay ?? 0,
+        }));
       }
     });
 
-    this.canvas.replaceChildren(...paths);
+    // Um gradiente só, em coordenadas da tela, atravessando o container
+    // da esquerda para a direita: a ligação nasce apagada perto da entrada
+    // e chega acesa na saída. Em coordenadas do próprio traço isto
+    // falharia — uma ligação horizontal tem caixa de altura zero, e o
+    // gradiente relativo a ela simplesmente não pinta.
+    const defs = svg('defs');
+    const gradiente = svg('linearGradient', {
+      id: 'fluxo-ligacao',
+      gradientUnits: 'userSpaceOnUse',
+      x1: 0, y1: 0, x2: hostRect.width, y2: 0,
+    });
+
+    gradiente.append(
+      svg('stop', { offset: '0%', 'stop-color': 'var(--color-link)' }),
+      svg('stop', { offset: '55%', 'stop-color': 'var(--color-link-mid)' }),
+      svg('stop', { offset: '100%', 'stop-color': 'var(--color-link-active)' }),
+    );
+    defs.append(gradiente);
+
+    this.canvas.replaceChildren(defs, ...paths);
 
     // O comprimento só existe depois de o `path` estar no documento, e
     // ele é o que define o passo do tracejado — sem isso o ponto que
@@ -183,6 +237,48 @@ export class FlowConnections extends HTMLElement {
 
       path.style.setProperty('--len', `${comprimento}px`);
       path.style.setProperty('--delay', `${path.dataset.delay}s`);
+    });
+
+    this.canvas.querySelectorAll('.link').forEach((path) => {
+      path.style.setProperty('--len', `${path.getTotalLength()}px`);
+      path.style.setProperty('--enter', `${Number(path.dataset.enter) * 420}ms`);
+    });
+
+    // O traçado de entrada roda UMA vez. Sem esta trava, cada resize
+    // redesenharia a rede do zero na frente de quem só arrastou a janela.
+    if (anima && !this.jaEntrou) {
+      this.jaEntrou = true;
+      this.canvas.classList.add('is-entering');
+
+      // A classe precisa SAIR quando a animação termina. Ela fica no
+      // `<svg>`, que sobrevive aos redesenhos; deixada ali, os traços
+      // recriados a cada resize herdariam o `stroke-dasharray` e a rede
+      // inteira se redesenharia na frente de quem só arrastou a janela.
+      clearTimeout(this.fimDaEntrada);
+      this.fimDaEntrada = setTimeout(() => {
+        this.canvas?.classList.remove('is-entering');
+      }, 1400);
+    }
+
+    this.aplicarRastro();
+  }
+
+  // Iluminar o caminho de um campo: as ligações que saem dele acendem, o
+  // resto recua. É a resposta visual à pergunta "para onde vai a idade?",
+  // e ela não precisa de um segundo desenho — só de uma classe.
+  set trace(campo) {
+    this.rastro = campo ? anchorId.input(campo) : null;
+    this.aplicarRastro();
+  }
+
+  aplicarRastro() {
+    if (!this.canvas) {
+      return;
+    }
+
+    this.canvas.classList.toggle('is-tracing', Boolean(this.rastro));
+    this.canvas.querySelectorAll('.link, .link-flow').forEach((path) => {
+      path.classList.toggle('is-traced', path.dataset.from === this.rastro);
     });
   }
 }
