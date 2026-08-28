@@ -167,15 +167,7 @@ npm run serve                      # http://localhost:3000
 npm run serve -- --port=8080
 ```
 
-O mesmo endereço abre uma **página** com três modos sobre a mesma rede:
-
-![A página do fluxo: passar o mouse por um campo acende o caminho dele pela rede, editar um valor repontua o cliente na hora, e os três modos mostram a mesma rede decidindo, aprendendo e sendo medida.](docs/fluxo-da-analise.gif)
-
-- **Análise** — o caminho do dado, dos campos que entraram até a probabilidade que saiu. Passar o mouse por um campo **acende o caminho dele**: uma coluna numérica vai para a escala min–max, uma qualitativa vai para o one-hot, e as duas só se encontram na primeira camada oculta. Os 19 campos são **editáveis**: baixar o prazo de 48 para 6 meses repontua o cliente e move as barras na hora.
-- **Treinamento** — o laço que produziu os pesos, passo a passo — passo à frente, erro medido, passo atrás, pesos ajustados —, ao lado da **curva real** daquele treino: a perda de treino caindo, a de validação achatando, e o ponto onde o *early stopping* cortou.
-- **Avaliação** — quanto ele acerta **ao lado do piso da classe majoritária**, a matriz de confusão no limiar escolhido, os três cortes candidatos com o preço de cada um, e a auditoria por sexo com a regra dos quatro quintos.
-
-Trocar de modo **não descarta a simulação**: o cliente editado continua lá quando se volta para a análise. A página consome as mesmas rotas que qualquer outro cliente da API e [está documentada junto do serviço](docs/servico.md#-a-página-do-fluxo).
+O serviço responde **JSON e nada mais** — quem quiser uma tela que o consuma a serve por fora:
 
 ```bash
 curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
@@ -229,12 +221,7 @@ tfjs-credit-risk-classifier/
 │   ├── 18-main.js         # o fluxo completo de uma execução
 │   ├── 19-artifacts.js    # o pacote servido: pesos + scaler + limiar + contrato
 │   ├── 20-contract.js     # validação do payload que chega pela API
-│   ├── 21-api.js          # o servidor `node:http` e as três rotas
-│   └── 22-web.js          # os arquivos da página, servidos pelo mesmo processo
-├── web/                   # a página do fluxo: sem build, sem dependência
-│   ├── index.html
-│   ├── styles/            # tokens (cores, espaçamento, tema claro/escuro) e layout
-│   └── js/                # api → mappers → componentes (custom elements)
+│   └── 21-api.js          # o servidor `node:http` e as três rotas
 ├── scripts/
 │   ├── fetch-german.js    # baixa o German Credit da UCI e converte
 │   ├── seed.js            # regera o CSV sintético (ruído e balanço configuráveis)
@@ -251,8 +238,7 @@ tfjs-credit-risk-classifier/
 │   ├── inferencia.md
 │   ├── servico.md
 │   ├── api.md
-│   ├── testes.md
-│   └── fluxo-da-analise.gif   # a página em funcionamento, no topo deste README
+│   └── testes.md
 ├── package.json
 ├── package-lock.json
 ├── .nvmrc                 # versão do Node suportada
@@ -274,7 +260,7 @@ npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
 ```
 
-São **458 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
+São **394 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
 
 > ⛔ Se o `npm install` ou o `npm start` quebrarem, o culpado quase sempre é a versão do Node: veja [Solução de problemas](docs/testes.md#-solução-de-problemas).
 
@@ -377,7 +363,6 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~Sem validação cruzada~~ | `npm run cv`: k dobras estratificadas, média com erro padrão, e a auditoria de disparidade rodando sobre os 1.000 clientes |
 | ~~Modelo salvo sem versionar o scaler junto~~ | [`metadata.json`](docs/servico.md#-a-correção-o-modelo-como-pacote): escala, ordem das features e limiar viajam com os pesos, e a carga recusa o pacote se qualquer um dos três não bater |
 | ~~Limiar escolhido no mesmo conjunto em que é medido~~ | [Fatia de calibração](docs/metricas.md#onde-o-corte-é-escolhido): o treino se parte em 640 para ajustar os pesos e 160 para escolher o corte, e o teste só é tocado na hora de reportar. Vale para o fluxo principal **e** para cada dobra da validação cruzada |
-| ~~A camada da página sem teste nenhum~~ | `web/package.json` declara os módulos como ESM, e as funções puras de `mappers.js` e `domain.js` passaram a ser cobertas pelo mesmo `npm test` — sem build e sem dependência |
 
 ---
 
@@ -403,7 +388,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);
 - [x] ~~salvar e recarregar o modelo (`model.save` / `tf.loadLayersModel`)~~ — feito, veja [Persistência do modelo](docs/inferencia.md#-persistência-do-modelo);
 - [x] ~~API REST com endpoint `POST /risk-score`~~ — feito, veja [O serviço](docs/servico.md#-o-serviço-api-rest-pacote-servido-e-contrato-de-entrada);
-- [x] ~~frontend para simular clientes~~ — feito, veja [A página do fluxo](docs/servico.md#-a-página-do-fluxo);
+- [ ] frontend para simular clientes;
 - [ ] inferência no navegador com TensorFlow.js;
 - [ ] autenticação e log estruturado das decisões servidas.
 

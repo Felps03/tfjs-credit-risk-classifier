@@ -140,12 +140,6 @@ const {
   resolvePort,
   exampleCustomer,
   observedRange,
-  contentType,
-  withIndex,
-  resolveAsset,
-  readAsset,
-  createWebHandler,
-  WEB_DIR,
 } = require('../index');
 
 // ==================================================
@@ -4843,7 +4837,7 @@ describe('resolvePort', () => {
 
 
 // ==================================================
-// A página servida junto da API
+// O contrato publicado no `GET /schema`
 // ==================================================
 describe('exampleCustomer', () => {
   it('dada uma fonte com atributo protegido, quando publicada, então o exemplo sai sem ele', () => {
@@ -4911,40 +4905,6 @@ describe('observedRange', () => {
     // Then — 200 está muito fora de [19, 75] e mesmo assim passa
     assert.ok(faixa.age.max < 200);
     assert.deepEqual(errors, []);
-  });
-});
-
-describe('contentType', () => {
-  it('dadas as extensões da página, quando consultadas, então cada uma tem seu tipo', () => {
-    // Given — um módulo ES servido como text/plain é recusado pelo
-    // `<script type="module">` com um erro que não diz isso
-    assert.match(contentType('/web/index.html'), /^text\/html/);
-    assert.match(contentType('/web/styles/app.css'), /^text\/css/);
-    assert.match(contentType('/web/js/app.js'), /^text\/javascript/);
-    assert.equal(contentType('/web/icone.svg'), 'image/svg+xml');
-  });
-
-  it('dada uma extensão desconhecida, quando consultada, então cai no genérico', () => {
-    // Given / When / Then
-    assert.equal(contentType('/web/dados.bin'), 'application/octet-stream');
-  });
-
-  it('dada uma extensão em maiúsculas, quando consultada, então é reconhecida', () => {
-    // Given / When / Then
-    assert.match(contentType('/web/INDEX.HTML'), /^text\/html/);
-  });
-});
-
-describe('withIndex', () => {
-  it('dado um caminho de pasta, quando resolvido, então procura o index', () => {
-    // Given — `/` não é um arquivo; é a intenção de abrir a página
-    assert.equal(withIndex('/'), '/index.html');
-    assert.equal(withIndex('/js/'), '/js/index.html');
-  });
-
-  it('dado um caminho de arquivo, quando resolvido, então fica como está', () => {
-    // Given / When / Then
-    assert.equal(withIndex('/js/app.js'), '/js/app.js');
   });
 });
 
@@ -5043,142 +5003,12 @@ describe('resolveBalance', () => {
   });
 });
 
-describe('resolveAsset', () => {
-  it('dado um caminho dentro da pasta, quando resolvido, então devolve o absoluto', () => {
-    // Given / When / Then
-    assert.equal(resolveAsset('/js/app.js'), path.join(WEB_DIR, 'js', 'app.js'));
-  });
-
-  it('dado `..` no caminho, quando resolvido, então não escapa da pasta', () => {
-    // Given — a garantia não é "devolve null", é "nunca sai de `web/`".
-    // O `..` é NEUTRALIZADO antes de virar caminho: `/../package.json`
-    // resolve para `web/package.json`, que não existe e vira 404. O
-    // arquivo do projeto continua fora de alcance, que é o que importa.
-    ['/../package.json', '/js/../../index.js', '/../../../../etc/passwd']
-      .forEach((caminho) => {
-        const resolvido = resolveAsset(caminho);
-
-        assert.ok(
-          resolvido === null || resolvido.startsWith(WEB_DIR + path.sep),
-          `${caminho} escapou para ${resolvido}`,
-        );
-      });
-  });
-
-  it('dado `..` para um irmão com o mesmo prefixo, quando resolvido, então não escapa', () => {
-    // Given — é o caso que o separador na comparação fecha: sem ele, uma
-    // pasta vizinha `web-secreta` passaria no `startsWith` de `web`
-    const resolvido = resolveAsset('/../web-secreta/senha.txt');
-
-    assert.ok(resolvido.startsWith(WEB_DIR + path.sep));
-    assert.equal(readAsset('/../web-secreta/senha.txt'), null);
-  });
-
-  it('dado um byte nulo, quando resolvido, então recusa', () => {
-    // Given / When / Then
-    assert.equal(resolveAsset('/js/app.js\u0000.png'), null);
-  });
-
-  it('dada uma URI mal codificada, quando resolvida, então recusa em vez de lançar', () => {
-    // Given — `%` solto é URI inválida; quem manda isso não pede página
-    assert.equal(resolveAsset('/%E0%A4%A'), null);
-  });
-
-  it('dado `..` percent-encoded, quando resolvido, então também é neutralizado', () => {
-    // Given — decodificar ANTES de normalizar é o que fecha este caso.
-    // Sem a ordem certa, `%2e%2e` atravessaria o normalize intacto e só
-    // viraria `..` na hora de tocar o disco.
-    //
-    // A sentinela é `package-lock.json`: ele existe na RAIZ do projeto e
-    // nunca em `web/`, então um `null` aqui só pode significar que o `..`
-    // foi descartado. `package.json` deixou de servir para isto no dia em
-    // que `web/package.json` passou a existir — a sentinela precisa ser um
-    // arquivo que o alvo não tem.
-    const resolvido = resolveAsset('/%2e%2e/package-lock.json');
-
-    assert.ok(resolvido.startsWith(WEB_DIR + path.sep));
-    assert.equal(readAsset('/%2e%2e/package-lock.json'), null);
-  });
-});
-
-describe('readAsset', () => {
-  it('dado um arquivo existente, quando lido, então devolve corpo e tipo', () => {
-    // Given / When
-    const asset = readAsset('/index.html');
-
-    // Then
-    assert.match(asset.type, /^text\/html/);
-    assert.ok(asset.body.includes('data-processing-flow'));
-  });
-
-  it('dada a raiz, quando lida, então serve o index', () => {
-    // Given / When / Then
-    assert.deepEqual(readAsset('/').body, readAsset('/index.html').body);
-  });
-
-  it('dado um arquivo inexistente, quando lido, então devolve null', () => {
-    // Given — o `null` é o que devolve a palavra ao 404 do roteador
-    assert.equal(readAsset('/nao-existe.js'), null);
-  });
-
-  it('dada uma pasta, quando lida, então devolve null', () => {
-    // Given — servir o conteúdo de um diretório não é servir uma página
-    assert.equal(readAsset('/js'), null);
-  });
-});
-
-describe('createWebHandler', () => {
-  it('dado um GET de arquivo existente, quando tratado, então responde 200', () => {
-    // Given / When
-    const resposta = createWebHandler()({ method: 'GET' }, '/styles/app.css');
-
-    // Then
-    assert.equal(resposta.status, 200);
-    assert.match(resposta.type, /^text\/css/);
-    assert.equal(resposta.headers['cache-control'], 'no-cache');
-  });
-
-  it('dado um POST, quando tratado, então devolve null', () => {
-    // Given — arquivo estático não se escreve pela porta da frente
-    assert.equal(createWebHandler()({ method: 'POST' }, '/index.html'), null);
-  });
-
-  it('dado um caminho fora da pasta, quando tratado, então devolve null', () => {
-    // Given / When / Then — mesma sentinela: um arquivo que existe na raiz
-    // e nunca dentro de `web/`
-    assert.equal(createWebHandler()({ method: 'GET' }, '/../package-lock.json'), null);
-  });
-
-  it('dado o marcador de módulo, quando pedido em qualquer grafia, então não é servido', () => {
-    // Given — `web/package.json` existe para o `node --test` enxergar os
-    // módulos de `web/js/` como ESM. Ele não faz parte da página.
-    const handler = createWebHandler();
-    const grafias = [
-      '/package.json',
-      '/../package.json',
-      '/%2e%2e/package.json',
-      '/js/../package.json',
-    ];
-
-    // When / Then — a recusa vale para o caminho RESOLVIDO, então nenhuma
-    // grafia alternativa a contorna
-    grafias.forEach((pathname) => {
-      assert.equal(handler({ method: 'GET' }, pathname), null, pathname);
-      assert.equal(readAsset(pathname), null, pathname);
-    });
-
-    // E o arquivo existe mesmo — a recusa é uma decisão, não um 404 por
-    // acaso, que é o que este teste trava
-    assert.ok(fs.existsSync(path.join(WEB_DIR, 'package.json')));
-  });
-});
-
-describe('createApi com os arquivos da página', () => {
+describe('createApi', () => {
   let server;
   let base;
 
   before(async () => {
-    // Given — as três rotas da API mais os arquivos da página
+    // Given — as três rotas da API sobre um pacote de mentira
     const artifacts = {
       metadata: {
         source: 'synthetic',
@@ -5199,18 +5029,9 @@ describe('createApi com os arquivos da página', () => {
 
   after(() => new Promise((resolve) => server.close(resolve)));
 
-  it('dada a raiz, quando pedida, então serve a página', async () => {
-    // Given / When
+  it('dada a raiz, quando pedida, então responde o 404 da API', async () => {
+    // Given — o serviço é JSON e nada mais: não existe página para servir
     const response = await fetch(`${base}/`);
-
-    // Then
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('content-type'), /^text\/html/);
-  });
-
-  it('dado um caminho que não é rota nem arquivo, quando pedido, então volta ao 404 da API', async () => {
-    // Given — o fallback devolve `null` e a palavra volta ao roteador
-    const response = await fetch(`${base}/xpto`);
     const body = await response.json();
 
     // Then
@@ -5218,30 +5039,14 @@ describe('createApi com os arquivos da página', () => {
     assert.ok(body.routes.some((rota) => rota.includes('/risk-score')));
   });
 
-  it('dado `..` na URL, quando pedido, então não entrega arquivo do projeto', async () => {
-    // Given / When / Then
-    assert.equal((await fetch(`${base}/%2e%2e/package.json`)).status, 404);
-  });
+  it('dado um caminho que não é rota, quando pedido, então lista as rotas no 404', async () => {
+    // Given / When
+    const response = await fetch(`${base}/xpto`);
+    const body = await response.json();
 
-  it('dado createApi sem fallback, quando a raiz é pedida, então responde 404', async () => {
-    // Given — o serviço puro, sem nada estático
-    const puro = createApi({
-      metadata: {
-        source: 'synthetic',
-        encoding: 'raw',
-        threshold: 0.3,
-        featureNames: SYNTHETIC_SOURCE.featureNames,
-        savedAt: '2026-01-01T00:00:00.000Z',
-      },
-      source: SYNTHETIC_SOURCE,
-      predict: () => 0.5,
-    }, null);
-    const url = `http://localhost:${await listen(puro, 0)}/`;
-
-    // When / Then
-    assert.equal((await fetch(url)).status, 404);
-
-    await new Promise((resolve) => puro.close(resolve));
+    // Then
+    assert.equal(response.status, 404);
+    assert.ok(body.routes.some((rota) => rota.includes('/schema')));
   });
 
   it('dado GET /schema, quando pedido, então publica a forma da rede e um exemplo válido', async () => {

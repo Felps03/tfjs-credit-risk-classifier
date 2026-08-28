@@ -6,7 +6,7 @@
 
 ## Cobertura da suíte
 
-São **458 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**. Eles rodam em dois arquivos: `test/index.test.js` cobre o laboratório e o serviço em CommonJS; `test/web.test.mjs` cobre as funções puras da página, que são ESM:
+São **394 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**. Todos vivem em `test/index.test.js`, que cobre o laboratório e o serviço:
 
 ```javascript
 it('dada a probabilidade exatamente no limiar, quando classificada, então retorna ALTO RISCO', () => {
@@ -61,7 +61,6 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | `splitCalibration` | A fatia é 20% do treino, as duas partes mantêm a proporção de classes, **nada se perde nem se repete**, e a fração explícita manda |
 | `balancedClassWeight` | As duas classes somam o mesmo peso total, o caso equilibrado é neutro, rótulos planos valem tanto quanto aninhados, e **classe ausente devolve `null` em vez de peso infinito** |
 | `resolveBalance` | Ausência é desligado, `--balancear` liga, e `--balancear=false` lança em vez de ligar o que o usuário quis desligar |
-| O marcador de módulo | `web/package.json` **não é servido em nenhuma grafia** — nem por `/../package.json`, nem percent-encoded —, e o teste confirma que o arquivo existe, para que a recusa seja uma decisão e não um 404 por acaso |
 | `parseGermanCsv`       | Texto bruto da UCI → clientes prontos, ponta a ponta |
 | `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as 21 colunas declaradas e nenhum valor não-finito |
 | `fitMinMaxScaler` / `applyMinMaxScaler` | Mínimo e amplitude, coluna constante sem divisão por zero, valor fora da faixa **não** cortado, ordem do vetor e **ausência de vazamento do teste para a escala** |
@@ -95,8 +94,7 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | `observedRange` | `min` e `range` do scaler viram `min` e `max`, pacote sem scaler devolve vazio, e a faixa **não restringe o contrato**: `age: 200` está fora dela e continua sendo aceito |
 | Bloco de treino no `GET /schema` | A curva viaja inteira com os hiperparâmetros; pacote salvo **antes** do histórico devolve o bloco sem ele; pacote sem bloco nenhum devolve `null` sem quebrar |
 | Bloco de avaliação no `GET /schema` | Baseline, matriz e custos viajam inteiros; pacote sem avaliação devolve `null`; limiar `Infinity` entre os candidatos é gravado como `null` em vez de um número falso |
-| `resolveAsset` / `readAsset` / `contentType` | `..`, `..` percent-encoded, byte nulo, URI malformada e irmão de mesmo prefixo — **nenhum sai de `web/`**; `/` serve o index, pasta e arquivo inexistente devolvem `null`, e cada extensão tem seu `content-type` |
-| Página servida junto da API | `GET /` devolve o HTML, `/xpto` **continua sendo o 404 da API** (o fallback devolve a palavra ao roteador), `createApi(artifacts, null)` sobe o serviço puro, e `/schema` publica topologia, estratégia do limiar e o exemplo |
+| `createApi` sobre um pacote de mentira | `GET /` e `/xpto` caem no **404 da API**, que lista as rotas existentes, e `/schema` publica topologia, estratégia do limiar e o exemplo |
 | `resolvePort` | Padrão, `--port=8080`, **`--port=0` aceito** (porta livre do sistema) e `99999`, `abc`, `8080.5` e vazio lançando |
 | `resolveArchitectureRun` | Ausência é `null`, `--arquiteturas` usa uma repetição, `--repeticoes=k` usa o pedido, e `--arquiteturas=5` ou `--repeticoes=0` lançam |
 | `ARCHITECTURES` / `compareArchitectures` | O piso da lista é a regressão logística, rótulos únicos, uma linha medida por arquitetura, parâmetros crescendo com a topologia e a validação cruzada informando parâmetros e épocas por dobra |

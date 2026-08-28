@@ -1,5 +1,0 @@
-{
-  "//": "Marcador de módulo, não um pacote. O package.json da raiz declara `commonjs`, e sem este arquivo o Node lê os módulos de `web/js/` como CommonJS e recusa os `export` — o navegador não liga, mas o `node --test` sim. É o que torna `mappers.js` e `domain.js` testáveis sem build e sem dependência. `22-web.js` recusa servi-lo.",
-  "type": "module",
-  "private": true
-}

@@ -140,9 +140,6 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `observedRange` | função | Metadados → `min`/`max` por coluna numérica, reconstruídos do scaler. **Informa, não valida**: fora da faixa continua sendo aceito |
 | `training` no pacote | bloco de metadados | Hiperparâmetros do treino e o `history` por época (`loss`, `valLoss`) que o `model.fit` devolveu — publicado inteiro no `GET /schema` |
 | `evaluation` no pacote | bloco de metadados | Acurácia **ao lado do baseline**, AUC, matriz e métricas no limiar escolhido, os três cortes candidatos com custo, e a auditoria por grupo |
-| `createWebHandler`, `readAsset`, `resolveAsset` | funções | Os arquivos da página em `web/`, com o `..` neutralizado antes de virar caminho; devolvem `null` para "não é meu", e é esse `null` que devolve a palavra ao `404` |
-| `sendAsset` | função | O irmão de `sendJson` para o que não é JSON: escreve o arquivo já resolvido com o `content-type` que veio dele. Existe separado justamente porque é o `content-type` que muda entre um `.html` e um `.js` |
-| `contentType`, `withIndex`, `CONTENT_TYPES`, `WEB_DIR` | funções / constantes | Tipo por extensão, `/` → `index.html` e a pasta servida |
 | `API_PORT`, `API_BODY_LIMIT`, `resolvePort` | constantes / função | Porta padrão `3000`, teto do corpo e leitura de `--port=` |
 
 ---

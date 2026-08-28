@@ -3,7 +3,6 @@ const http = require('node:http');
 const { API_BODY_LIMIT, API_PORT } = require('./00-constants');
 const { round } = require('./19-artifacts');
 const { describeSchema, validateCustomer } = require('./20-contract');
-const { createWebHandler } = require('./22-web');
 
 // --------------------------------------------------
 // 21. O serviço
@@ -69,18 +68,6 @@ const sendJson = (res, status, body, { close = false } = {}) => {
   res.end(payload);
 };
 
-// O irmão de `sendJson` para o que não é JSON: os arquivos da página.
-// Existe separado porque a única coisa que ele não pode fazer é assumir
-// o `content-type` — é justamente o que muda entre um `.html` e um `.js`.
-const sendAsset = (res, { status, type, body, headers = {} }) => {
-  res.writeHead(status, {
-    'content-type': type,
-    'content-length': body.length,
-    ...headers,
-  });
-  res.end(body);
-};
-
 // Lê o corpo com teto. Sem o teto, um POST grande o bastante derruba o
 // processo antes de qualquer validação rodar — a validação de esquema
 // não protege contra o que nunca chega a ser um objeto.
@@ -139,23 +126,11 @@ const readJsonBody = (req, limit = API_BODY_LIMIT) => new Promise((resolve) => {
 const isJsonRequest = (req) =>
   (req.headers['content-type'] ?? '').split(';')[0].trim() === 'application/json';
 
-// O `fallback` é opcional de propósito: sem ele o roteador é exatamente
-// o que sempre foi, e é assim que os testes que só querem a API o montam.
-// Com ele, o pathname que não é rota vira uma tentativa de arquivo ANTES
-// do 404 — e não depois, porque um 404 já enviado não se desfaz.
-const createRequestListener = (routes, fallback = null) => async (req, res) => {
+const createRequestListener = (routes) => async (req, res) => {
   const { pathname } = new URL(req.url, 'http://localhost');
   const route = routes[pathname];
 
   if (!route) {
-    const asset = fallback === null ? null : fallback(req, pathname);
-
-    if (asset !== null) {
-      sendAsset(res, asset);
-
-      return;
-    }
-
     sendJson(res, 404, {
       error: `Rota desconhecida: ${pathname}.`,
       routes: Object.entries(routes).map(([path, handlers]) =>
@@ -326,11 +301,11 @@ const createRoutes = (artifacts) => {
   };
 };
 
-// A página vem junto por padrão. `createApi(artifacts, null)` devolve o
-// serviço puro, sem nada estático — que é o que se sobe quando a API não
-// é a coisa que alguém abre no navegador.
-const createApi = (artifacts, fallback = createWebHandler()) =>
-  http.createServer(createRequestListener(createRoutes(artifacts), fallback));
+// O serviço é JSON e nada mais. Quem quiser uma página que o consuma a
+// serve por fora, e é essa separação que mantém este módulo sem nenhuma
+// decisão sobre arquivo, caminho ou `content-type`.
+const createApi = (artifacts) =>
+  http.createServer(createRequestListener(createRoutes(artifacts)));
 
 // Promisificado para que o script de entrada possa dar `await` e imprimir
 // a porta REAL — com `--port=0` o sistema escolhe uma, e é assim que os
@@ -345,7 +320,6 @@ module.exports = {
   exampleCustomer,
   observedRange,
   sendJson,
-  sendAsset,
   readJsonBody,
   isJsonRequest,
   createRequestListener,

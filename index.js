@@ -205,7 +205,6 @@ const {
   exampleCustomer,
   observedRange,
   sendJson,
-  sendAsset,
   readJsonBody,
   isJsonRequest,
   createRequestListener,
@@ -213,16 +212,6 @@ const {
   createApi,
   listen,
 } = require('./src/21-api');
-
-const {
-  WEB_DIR,
-  CONTENT_TYPES,
-  contentType,
-  withIndex,
-  resolveAsset,
-  readAsset,
-  createWebHandler,
-} = require('./src/22-web');
 
 // Só executa quando chamado direto (node index.js).
 // Ao ser importado pelos testes, apenas expõe as funções.
@@ -421,18 +410,10 @@ module.exports = {
   exampleCustomer,
   observedRange,
   sendJson,
-  sendAsset,
   readJsonBody,
   isJsonRequest,
   createRequestListener,
   createRoutes,
   createApi,
   listen,
-  WEB_DIR,
-  CONTENT_TYPES,
-  contentType,
-  withIndex,
-  resolveAsset,
-  readAsset,
-  createWebHandler,
 };
