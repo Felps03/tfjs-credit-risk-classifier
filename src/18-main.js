@@ -1,6 +1,7 @@
 const tf = require('@tensorflow/tfjs-node');
 
 const {
+  CALIBRATION_SPLIT,
   DECISION_THRESHOLD,
   HIDDEN_UNITS,
   MODEL_DIR,
@@ -16,12 +17,12 @@ const { computeConfusionMatrix, formatConfusionMatrix } = require('./13-confusio
 const { evaluateModel, majorityBaseline } = require('./16a-evaluate');
 const { predictRisk } = require('./12-inference');
 const { computeMetrics, formatMetrics, safeDivide } = require('./14-metrics');
-const { TRAINING, buildModel, fitModel } = require('./10-model');
+const { TRAINING, balancedClassWeight, buildModel, fitModel } = require('./10-model');
 const { loadModel } = require('./11-persistence');
 const { round, saveArtifacts } = require('./19-artifacts');
 const { classify } = require('./01-preprocess');
 const { computeRocCurve, formatRocCurve } = require('./15-roc');
-const { shuffle, stratifiedSplitCustomers } = require('./09-split');
+const { shuffle, splitCalibration, stratifiedSplitCustomers } = require('./09-split');
 const { DEFAULT_SOURCE_ID, SOURCES } = require('./08-sources');
 const { createRandom } = require('./02-synthetic');
 const {
@@ -39,7 +40,12 @@ const {
 // --------------------------------------------------
 const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const source = SOURCES[sourceId];
-  const { mitigate = false, units = HIDDEN_UNITS, ...regularization } = overrides;
+  const {
+    mitigate = false,
+    balance = false,
+    units = HIDDEN_UNITS,
+    ...regularization
+  } = overrides;
 
   // A fonte decide; a linha de comando tem a última palavra.
   const { l2, dropout } = { ...source.regularization, ...regularization };
@@ -64,19 +70,37 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   // muda de execução para execução por motivo nenhum.
   const { trainCustomers, testCustomers } = stratifiedSplitCustomers(customers);
 
-  // A escala é medida SÓ no treino e aplicada aos dois conjuntos.
-  // O teste é tratado como dado que ainda não existia quando o
-  // pré-processamento foi definido — porque é assim que será em produção.
+  // O treino se parte de novo. A fatia de calibração faz duas coisas —
+  // valida o early stopping e escolhe o limiar —, e nenhuma delas pode
+  // acontecer no teste: escolher o corte onde ele é medido otimiza para
+  // aquele sorteio e publica um número que não se sustenta em produção.
+  const { fitCustomers, calibrationCustomers } = splitCalibration(trainCustomers);
+
+  // A escala continua sendo medida no TREINO INTEIRO — calibração
+  // inclusive. Ela não é escolhida nem ajustada, é medida; e o pacote que
+  // vai para o serviço precisa da escala do maior conjunto disponível
+  // antes do teste.
   const scaler = source.fitScaler(trainCustomers);
   const toVector = (customer) => source.toVector(customer, scaler);
 
+  const fitLabels = fitCustomers.map(({ risk }) => [risk]);
   const trainLabels = trainCustomers.map(({ risk }) => [risk]);
   const testLabels = testCustomers.map(({ risk }) => [risk]);
 
+  const xFit = tf.tensor2d(fitCustomers.map(toVector));
+  const yFit = tf.tensor2d(fitLabels);
+  const xCal = tf.tensor2d(calibrationCustomers.map(toVector));
+  const yCal = tf.tensor2d(calibrationCustomers.map(({ risk }) => [risk]));
   const xTrain = tf.tensor2d(trainCustomers.map(toVector));
   const yTrain = tf.tensor2d(trainLabels);
   const xTest = tf.tensor2d(testCustomers.map(toVector));
   const yTest = tf.tensor2d(testLabels);
+
+  console.log(
+    `Divisão: ${fitCustomers.length} para ajustar os pesos, `
+    + `${calibrationCustomers.length} para calibrar (validação + limiar), `
+    + `${testCustomers.length} para testar.`,
+  );
 
   const model = buildModel(source.featureNames.length, { units, l2, dropout });
 
@@ -93,7 +117,22 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   // como afirmação. Com ela, dá para VER a val_loss parar de melhorar
   // enquanto a loss de treino continua caindo, que é exatamente o que o
   // early stopping está cortando.
-  const { history } = await fitModel(model, xTrain, yTrain);
+  // O peso por classe é o único tratamento do desbalanceamento que age
+  // DURANTE o treino. Sem ele, errar um inadimplente é barato só porque
+  // há menos deles — e a rede aprende exatamente isso.
+  const classWeight = balance ? balancedClassWeight(fitLabels) : null;
+
+  console.log('Peso por classe:', classWeight
+    ? `balanceado (0 → ${classWeight[0].toFixed(3)}, 1 → ${classWeight[1].toFixed(3)})`
+    : 'nenhum (use --balancear)');
+
+  // A validação do early stopping agora é a fatia de calibração, passada
+  // explicitamente. Antes ela era os últimos 20% recortados por dentro do
+  // `validationSplit` — os mesmos clientes, mas invisíveis e sem nome.
+  const { history } = await fitModel(model, xFit, yFit, {
+    validationData: [xCal, yCal],
+    ...(classWeight === null ? {} : { classWeight }),
+  });
 
   // O mesmo modelo avaliado nos dois conjuntos. `evaluate` roda em modo de
   // inferência, então o dropout está DESLIGADO nas duas medidas — é a
@@ -130,8 +169,12 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   console.log('');
   console.log(formatMetrics(metrics));
 
-  // O limiar atual é apenas UM ponto da curva; a AUC resume todos.
+  // Duas curvas, e a diferença entre elas é a correção inteira deste
+  // fluxo. A do TESTE é a que se reporta: a AUC não depende de limiar
+  // nenhum, então medi-la no teste é legítimo e é o que o pacote publica.
+  // A da CALIBRAÇÃO é a que ESCOLHE o corte — e ela nunca viu o teste.
   const { points, auc, positives, negatives } = computeRocCurve(model, xTest, yTest);
+  const calibrationRoc = computeRocCurve(model, xCal, yCal);
   const operatingPoint = {
     fpr: safeDivide(
       confusion.falsePositives,
@@ -153,27 +196,42 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   };
   const roc = { points, auc, positives, negatives };
 
+  // A comparação dos três cortes roda sobre a CALIBRAÇÃO. Os FP, FN e
+  // custos desta tabela são, portanto, os da calibração — e é por isso
+  // que eles não batem com a matriz do teste logo abaixo. Não é
+  // inconsistência: é a separação funcionando. Se batessem, seria porque
+  // o corte foi escolhido onde é medido.
+  // O ponto de operação do corte padrão, medido na calibração. Sem ele o
+  // `scorePoint` receberia um ponto sem `fpr` nem `tpr` e devolveria um
+  // custo `NaN` — que apareceria na tabela como um traço, e não como erro.
+  const calibrationConfusion = computeConfusionMatrix(model, xCal, yCal, DECISION_THRESHOLD);
+  const calibrationPoint = {
+    threshold: DECISION_THRESHOLD,
+    fpr: safeDivide(
+      calibrationConfusion.falsePositives,
+      calibrationConfusion.falsePositives + calibrationConfusion.trueNegatives,
+    ),
+    tpr: computeMetrics(calibrationConfusion).recall,
+  };
+
   const candidates = [
     {
       label: 'Padrão (0.5)',
-      point: scorePoint(
-        { ...operatingPoint, threshold: DECISION_THRESHOLD },
-        roc,
-        costs,
-      ),
+      point: scorePoint(calibrationPoint, calibrationRoc, costs),
     },
     {
       label: 'Youden (max J)',
-      point: scorePoint(chooseThresholdByYouden(roc), roc, costs),
+      point: scorePoint(chooseThresholdByYouden(calibrationRoc), calibrationRoc, costs),
     },
     {
       label: 'Menor custo',
-      point: chooseThresholdByCost(roc, costs),
+      point: chooseThresholdByCost(calibrationRoc, costs),
     },
   ];
 
   console.log(
-    `\nAjuste do limiar (FP custa ${FALSE_POSITIVE_COST}, FN custa ${FALSE_NEGATIVE_COST}):`,
+    `\nAjuste do limiar em ${calibrationCustomers.length} clientes de CALIBRAÇÃO`,
+    `(FP custa ${FALSE_POSITIVE_COST}, FN custa ${FALSE_NEGATIVE_COST}):`,
   );
   console.log(formatThresholdComparison(candidates));
 
@@ -185,8 +243,30 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const confusionEscolhida = computeConfusionMatrix(model, xTest, yTest, chosen.threshold);
   const metricasEscolhidas = computeMetrics(confusionEscolhida);
 
-  console.log('\nMatriz no limiar escolhido', `(${formatThreshold(chosen.threshold)}):`);
+  console.log(
+    `\nMatriz no limiar escolhido (${formatThreshold(chosen.threshold)})`,
+    `— ${testCustomers.length} clientes de TESTE:`,
+  );
   console.log(formatConfusionMatrix(confusionEscolhida));
+
+  // O número que a separação existe para tornar visível. O corte foi
+  // escolhido onde custa `chosen.cost`; ele é aplicado onde custa isto.
+  // A distância entre os dois, por cliente, é exatamente o otimismo que
+  // escolher o corte no próprio teste escondia — e que este projeto
+  // publicava sem saber.
+  const custoNoTeste = confusionEscolhida.falsePositives * FALSE_POSITIVE_COST
+    + confusionEscolhida.falseNegatives * FALSE_NEGATIVE_COST;
+  const porCliente = (custo, n) => (custo / n).toFixed(3);
+
+  console.log(
+    `Custo por cliente: ${porCliente(chosen.cost, calibrationCustomers.length)}`,
+    `na calibração (onde o corte foi escolhido) ·`,
+    `${porCliente(custoNoTeste, testCustomers.length)} no teste (onde ele vale).`,
+  );
+  console.log(
+    'A distância entre os dois é o otimismo de escolher o corte no mesmo',
+    'conjunto em que ele é medido — que é o que este fluxo deixou de fazer.',
+  );
   console.log('');
 
   // ------------------------------------------------
@@ -266,9 +346,18 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
     scaler,
     threshold: chosen.threshold,
     thresholdStrategy:
-      `menor custo (FP=${FALSE_POSITIVE_COST}, FN=${FALSE_NEGATIVE_COST})`,
+      `menor custo (FP=${FALSE_POSITIVE_COST}, FN=${FALSE_NEGATIVE_COST})`
+      + ` em ${calibrationCustomers.length} clientes de calibração`,
     training: {
       customers: trainCustomers.length,
+
+      // As duas fatias do treino, gravadas separadas porque fazem coisas
+      // diferentes: uma ajusta os pesos, a outra valida a parada e
+      // escolhe o corte. Publicá-las como um número só esconderia
+      // exatamente o que este pacote passou a fazer certo.
+      fitCustomers: fitCustomers.length,
+      calibrationCustomers: calibrationCustomers.length,
+      balanced: classWeight !== null,
       units,
       l2,
       dropout,
@@ -279,7 +368,12 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
       // um pacote treinado com outra configuração.
       epochs: TRAINING.epochs,
       batchSize: TRAINING.batchSize,
-      validationSplit: TRAINING.validationSplit,
+
+      // A validação deixou de ser um corte automático e virou um
+      // conjunto com nome. A fração continua sendo publicada porque é ela
+      // que descreve o tamanho da fatia; o que mudou é que agora ela é
+      // aplicada antes do `fit`, e não dentro dele.
+      validationSplit: CALIBRATION_SPLIT,
       patience: TRAINING.patience,
 
       // Quatro casas bastam para desenhar uma curva; a precisão cheia do
@@ -370,7 +464,7 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   // ------------------------------------------------
   // Limpeza de memória
   // ------------------------------------------------
-  tf.dispose([xTrain, yTrain, xTest, yTest]);
+  tf.dispose([xFit, yFit, xCal, yCal, xTrain, yTrain, xTest, yTest]);
   loadedModel.dispose();
 };
 

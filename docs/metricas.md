@@ -265,7 +265,7 @@ const scorePoint = (point, { positives, negatives }, costs) => {
 ### Saída
 
 ```text
-Ajuste do limiar (FP custa 1, FN custa 5):
+Ajuste do limiar (FP custa 1, FN custa 5) — dataset sintético:
 Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
 ---------------+--------+--------+--------+----+----+------
 Padrão (0.5)   | 0.5000 | 0.0049 | 0.6579 |  1 | 13 |    66
@@ -293,6 +293,67 @@ O efeito da razão de custos, isolado numa curva difícil:
 | Menor custo, `FN = 20` | `0.5000` | `0.4286` | `1.0000` | 3 | 0 | 3 |
 
 Com FN barato o corte **sobe** (aprova pouco, erra pouco por excesso); com FN caro **desce** até capturar todos os positivos. Youden fica no mesmo lugar nos dois casos, porque não enxerga custo nenhum.
+
+### Onde o corte é escolhido
+
+Escolher o corte é fácil; escolher **onde** escolhê-lo é o que separa um número publicável de um número bonito.
+
+Durante boa parte da vida deste projeto a resposta estava errada, e o erro tinha a assinatura de todos os erros caros que ele documenta: **nada quebrava**. A curva ROC era montada sobre o conjunto de TESTE, o corte de menor custo era escolhido nela, e a matriz publicada era recalculada no mesmo teste. O resultado é um corte ajustado às 200 linhas em que ele seria medido — o melhor corte **possível** naquele sorteio, que nenhum modelo alcança em dado novo.
+
+A correção é uma fatia:
+
+```text
+1.000 clientes
+├── 800 treino
+│   ├── 640  ajustam os pesos
+│   └── 160  CALIBRAÇÃO — validam o early stopping e escolhem o corte
+└── 200 teste — intocado até a hora de reportar
+```
+
+A fatia não é nova. `model.fit` já reservava exatamente estes 20% para o early stopping, invisíveis dentro do `validationSplit`. O que mudou é que agora ela é separada antes, tem nome, e ganha uma segunda função legítima:
+
+```javascript
+const { fitCustomers, calibrationCustomers } = splitCalibration(trainCustomers);
+
+await fitModel(model, xFit, yFit, { validationData: [xCal, yCal] });
+
+const calibrationRoc = computeRocCurve(model, xCal, yCal);   // ESCOLHE o corte
+const roc = computeRocCurve(model, xTest, yTest);            // reporta a AUC
+```
+
+Repare na segunda linha: a **AUC continua saindo do teste**, e isso é correto — ela não depende de limiar nenhum, então medi-la ali não otimiza nada. Só o CORTE precisa nascer fora.
+
+### O tamanho do otimismo
+
+A separação não é rigor abstrato: ela tem um número, e ele é impresso em toda execução.
+
+```text
+Ajuste do limiar em 160 clientes de CALIBRAÇÃO (FP custa 1, FN custa 5):
+Estratégia     | Limiar |    FPR |    TPR | FP | FN | Custo
+---------------+--------+--------+--------+----+----+------
+Padrão (0.5)   | 0.5000 | 0.0893 | 0.3542 | 10 | 31 |   165
+Youden (max J) | 0.2613 | 0.2857 | 0.7917 | 32 | 10 |    82
+Menor custo    | 0.1587 | 0.5357 | 0.9792 | 60 |  1 |    65
+
+Matriz no limiar escolhido (0.1587) — 200 clientes de TESTE:
+           | Predito BAIXO | Predito ALTO
+-----------+---------------+-------------
+Real BAIXO |       61 (TN) |      79 (FP)
+Real ALTO  |        5 (FN) |      55 (TP)
+Custo por cliente: 0.406 na calibração (onde o corte foi escolhido) · 0.520 no teste (onde ele vale).
+```
+
+**28% mais caro por cliente** fora do conjunto que o escolheu. Essa distância é o que a versão anterior deste projeto publicava como se fosse desempenho, e é ela que a fatia de calibração devolve à realidade.
+
+> Os dois blocos citam FP e FN diferentes de propósito: o de cima é a calibração, o de baixo é o teste. **Se eles batessem seria porque o corte foi escolhido onde é medido.** A tela do serviço diz a mesma coisa, na faixa dos três cortes.
+
+A mesma correção vale para cada dobra da [validação cruzada](validacao-cruzada.md#-validação-cruzada-e-split-estratificado): a dobra de treino se parte de novo, o corte sai dessa fatia, e o custo reportado é o desse corte aplicado à dobra de teste. Foi por isso que os custos das tabelas de comparação subiram ~10% de uma medição para a outra, sem que nenhum modelo tivesse piorado.
+
+### O que ainda não é ideal
+
+A fatia de calibração faz **duas** coisas: valida a parada do early stopping e escolhe o corte. O ideal seriam dois conjuntos separados.
+
+Com 1.000 linhas, não são. Gastar mais 200 clientes para separar as duas funções custa em capacidade — e a [comparação de arquiteturas](modelo.md#-comparando-arquiteturas) mostra que o gargalo deste projeto é exatamente o dado. A reutilização é declarada em vez de escondida, que é a diferença entre uma limitação e um erro.
 
 ### O caso extremo
 

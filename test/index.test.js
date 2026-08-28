@@ -85,6 +85,7 @@ const {
   summarizeDecisions,
   formatMitigation,
   resolveMitigation,
+  resolveBalance,
   approvalRatio,
   formatAudit,
   GERMAN_ORDINAL_SOURCE,
@@ -106,6 +107,7 @@ const {
   shuffle,
   splitCustomers,
   stratifiedSplitCustomers,
+  splitCalibration,
   stratifiedFolds,
   summarize,
   resolveFolds,
@@ -114,6 +116,7 @@ const {
   formatCrossValidation,
   rocFromScores,
   TRAINING,
+  balancedClassWeight,
   majorityBaseline,
   API_PORT,
   API_BODY_LIMIT,
@@ -4945,6 +4948,101 @@ describe('withIndex', () => {
   });
 });
 
+describe('splitCalibration', () => {
+  const clientes = (total, taxa) => Array.from({ length: total }, (ignored, index) => ({
+    risk: index % 10 < taxa * 10 ? 1 : 0,
+    id: index,
+  }));
+
+  it('dado o treino, quando partido, então a calibração é 20% dele', () => {
+    // Given — a fatia que `model.fit` já reservava por dentro, agora com nome
+    const { fitCustomers, calibrationCustomers } = splitCalibration(clientes(800, 0.3));
+
+    // When / Then
+    assert.equal(fitCustomers.length, 640);
+    assert.equal(calibrationCustomers.length, 160);
+  });
+
+  it('dado o treino, quando partido, então as duas fatias mantêm a proporção de classes', () => {
+    // Given — uma calibração com metade dos inadimplentes escolheria o
+    // corte para uma população que não existe
+    const { fitCustomers, calibrationCustomers } = splitCalibration(clientes(800, 0.3));
+    const taxa = (grupo) => grupo.filter(({ risk }) => risk === 1).length / grupo.length;
+
+    assert.equal(taxa(fitCustomers), 0.3);
+    assert.equal(taxa(calibrationCustomers), 0.3);
+  });
+
+  it('dado o treino, quando partido, então NADA se perde nem se repete', () => {
+    // Given — sobreposição entre ajuste e calibração vazaria o conjunto
+    // que escolhe o corte para dentro do que treina os pesos
+    const treino = clientes(800, 0.3);
+    const { fitCustomers, calibrationCustomers } = splitCalibration(treino);
+    const ids = new Set([...fitCustomers, ...calibrationCustomers].map(({ id }) => id));
+
+    assert.equal(ids.size, treino.length);
+  });
+
+  it('dada uma fração explícita, quando partido, então ela manda', () => {
+    // Given / When
+    const { calibrationCustomers } = splitCalibration(clientes(1000, 0.3), 0.5);
+
+    // Then
+    assert.equal(calibrationCustomers.length, 500);
+  });
+});
+
+describe('balancedClassWeight', () => {
+  it('dado 30% de positivos, quando pesado, então as duas classes somam o mesmo total', () => {
+    // Given — é o que "balanced" significa: n / (k · n_c)
+    const labels = Array.from({ length: 1000 }, (ignored, i) => [i < 300 ? 1 : 0]);
+
+    // When
+    const peso = balancedClassWeight(labels);
+
+    // Then — 700 × 0,714 e 300 × 1,667 dão 500 cada
+    assert.ok(Math.abs(peso[0] * 700 - peso[1] * 300) < 1e-9);
+    assert.ok(Math.abs(peso[0] - 1000 / 1400) < 1e-9);
+    assert.ok(Math.abs(peso[1] - 1000 / 600) < 1e-9);
+  });
+
+  it('dadas classes equilibradas, quando pesadas, então o peso é neutro', () => {
+    // Given — sem desbalanceamento não há o que corrigir
+    assert.deepEqual(balancedClassWeight([[1], [1], [0], [0]]), { 0: 1, 1: 1 });
+  });
+
+  it('dados rótulos planos, quando pesados, então valem tanto quanto os aninhados', () => {
+    // Given — `[risk]` é a forma do tensor; `risk` é a do array de clientes
+    assert.deepEqual(balancedClassWeight([1, 1, 0, 0]), balancedClassWeight([[1], [1], [0], [0]]));
+  });
+
+  it('dada uma classe ausente, quando pesada, então devolve null em vez de peso infinito', () => {
+    // Given — dividir por zero renderia `Infinity` e quebraria o treino
+    // com um erro que não diz isso
+    assert.equal(balancedClassWeight([[0], [0], [0]]), null);
+    assert.equal(balancedClassWeight([[1], [1]]), null);
+  });
+});
+
+describe('resolveBalance', () => {
+  it('dada a ausência da flag, quando lida, então o peso por classe fica desligado', () => {
+    // Given — é mudança de política, e o padrão não muda sozinho
+    assert.equal(resolveBalance([]), false);
+    assert.equal(resolveBalance(['--cv', '--units=32,16']), false);
+  });
+
+  it('dada a flag, quando lida, então liga', () => {
+    assert.equal(resolveBalance(['--balancear']), true);
+  });
+
+  it('dado `--balancear=false`, quando lido, então LANÇA em vez de ligar', () => {
+    // Given — quem escreve isso quer desligar; ligar em silêncio é a
+    // pior resposta possível
+    assert.throws(() => resolveBalance(['--balancear=false']), /sem valor/);
+    assert.throws(() => resolveBalance(['--balancear=1']), /sem valor/);
+  });
+});
+
 describe('resolveAsset', () => {
   it('dado um caminho dentro da pasta, quando resolvido, então devolve o absoluto', () => {
     // Given / When / Then
@@ -4990,10 +5088,16 @@ describe('resolveAsset', () => {
     // Given — decodificar ANTES de normalizar é o que fecha este caso.
     // Sem a ordem certa, `%2e%2e` atravessaria o normalize intacto e só
     // viraria `..` na hora de tocar o disco.
-    const resolvido = resolveAsset('/%2e%2e/package.json');
+    //
+    // A sentinela é `package-lock.json`: ele existe na RAIZ do projeto e
+    // nunca em `web/`, então um `null` aqui só pode significar que o `..`
+    // foi descartado. `package.json` deixou de servir para isto no dia em
+    // que `web/package.json` passou a existir — a sentinela precisa ser um
+    // arquivo que o alvo não tem.
+    const resolvido = resolveAsset('/%2e%2e/package-lock.json');
 
     assert.ok(resolvido.startsWith(WEB_DIR + path.sep));
-    assert.equal(readAsset('/%2e%2e/package.json'), null);
+    assert.equal(readAsset('/%2e%2e/package-lock.json'), null);
   });
 });
 
@@ -5040,8 +5144,32 @@ describe('createWebHandler', () => {
   });
 
   it('dado um caminho fora da pasta, quando tratado, então devolve null', () => {
-    // Given / When / Then
-    assert.equal(createWebHandler()({ method: 'GET' }, '/../package.json'), null);
+    // Given / When / Then — mesma sentinela: um arquivo que existe na raiz
+    // e nunca dentro de `web/`
+    assert.equal(createWebHandler()({ method: 'GET' }, '/../package-lock.json'), null);
+  });
+
+  it('dado o marcador de módulo, quando pedido em qualquer grafia, então não é servido', () => {
+    // Given — `web/package.json` existe para o `node --test` enxergar os
+    // módulos de `web/js/` como ESM. Ele não faz parte da página.
+    const handler = createWebHandler();
+    const grafias = [
+      '/package.json',
+      '/../package.json',
+      '/%2e%2e/package.json',
+      '/js/../package.json',
+    ];
+
+    // When / Then — a recusa vale para o caminho RESOLVIDO, então nenhuma
+    // grafia alternativa a contorna
+    grafias.forEach((pathname) => {
+      assert.equal(handler({ method: 'GET' }, pathname), null, pathname);
+      assert.equal(readAsset(pathname), null, pathname);
+    });
+
+    // E o arquivo existe mesmo — a recusa é uma decisão, não um 404 por
+    // acaso, que é o que este teste trava
+    assert.ok(fs.existsSync(path.join(WEB_DIR, 'package.json')));
   });
 });
 

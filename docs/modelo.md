@@ -94,7 +94,7 @@ const buildModel = (inputSize = 4, options = {}) => {
 | ------------- | ----------------------------------------------------------------------------------------- |
 | **ReLU**      | Introduz não-linearidade barata e evita o desaparecimento de gradiente das camadas ocultas |
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
-| **16 → 8**    | Funil, e a topologia de **menor custo médio** numa [comparação de oito](#-comparando-arquiteturas) em que nenhuma se distingue das outras em acurácia |
+| **16 → 8**    | Funil, e uma das menores de uma [comparação de oito](#-comparando-arquiteturas) em que nenhuma se distingue de nenhuma — em acurácia, em AUC ou em custo |
 | **L2 + dropout** | Os dois freios contra decorar, [medidos em uma grade de 30 combinações](#-regularização-l2-e-dropout) |
 
 ```javascript
@@ -120,18 +120,20 @@ A lista começa **deliberadamente no piso**. Uma regressão logística (`--units
 ```text
 Arquitetura         | Parâmetros | Épocas |        Acurácia |             AUC |       Custo
 --------------------+------------+--------+-----------------+-----------------+------------
-regressão logística |         58 |   40.0 | 0.7330 ± 0.0153 | 0.7692 ± 0.0158 | 100.2 ± 3.7
-4                   |        237 |   39.0 | 0.7320 ± 0.0187 | 0.7697 ± 0.0235 |  98.2 ± 5.9
-16                  |        945 |   28.4 | 0.7510 ± 0.0148 | 0.7779 ± 0.0193 | 100.2 ± 4.5
-16 → 8 (padrão)     |       1073 |   28.4 | 0.7480 ± 0.0123 | 0.7812 ± 0.0154 |  94.4 ± 3.4
-32 → 16             |       2401 |   21.4 | 0.7490 ± 0.0154 | 0.7802 ± 0.0178 |  97.6 ± 3.9
-64 → 32             |       5825 |   19.4 | 0.7610 ± 0.0148 | 0.7760 ± 0.0189 | 101.6 ± 5.9
-128 → 64            |      15745 |   12.0 | 0.7450 ± 0.0135 | 0.7797 ± 0.0184 |  98.8 ± 4.5
-16 → 16 → 16        |       1489 |   22.8 | 0.7510 ± 0.0113 | 0.7776 ± 0.0177 |  96.8 ± 5.7
+regressão logística |         58 |   40.0 | 0.7370 ± 0.0137 | 0.7628 ± 0.0129 | 114.4 ± 8.9
+4                   |        237 |   40.0 | 0.7320 ± 0.0147 | 0.7629 ± 0.0186 | 114.4 ± 5.6
+16                  |        945 |   32.4 | 0.7390 ± 0.0143 | 0.7813 ± 0.0175 | 110.6 ± 5.8
+16 → 8 (padrão)     |       1073 |   27.4 | 0.7400 ± 0.0129 | 0.7752 ± 0.0159 | 105.2 ± 6.4
+32 → 16             |       2401 |   19.2 | 0.7570 ± 0.0140 | 0.7834 ± 0.0173 | 102.6 ± 6.2
+64 → 32             |       5825 |   19.2 | 0.7460 ± 0.0110 | 0.7775 ± 0.0176 | 109.8 ± 3.9
+128 → 64            |      15745 |   13.0 | 0.7460 ± 0.0120 | 0.7754 ± 0.0209 | 115.4 ± 4.8
+16 → 16 → 16        |       1489 |   22.4 | 0.7390 ± 0.0164 | 0.7782 ± 0.0201 | 103.4 ± 4.5
 
 Baseline da classe majoritária: 0.7000
 Protocolo: 5 dobras × 1 repetição(ões) = 5 medidas por arquitetura.
 ```
+
+> A coluna de custo desta tabela subiu ~10% em relação à primeira vez que ela foi medida, e a razão não é o modelo: é que o corte de cada dobra passou a ser [escolhido fora da dobra em que é medido](metricas.md#onde-o-corte-é-escolhido). O custo antigo era o do melhor corte **possível** naquela dobra — um número que nenhum modelo alcança em dado novo.
 
 ### O resultado é um empate
 
@@ -141,13 +143,13 @@ O extremo mais favorável a "rede maior é melhor" é comparar a pior acurácia 
 
 | | Acurácia | Erro padrão |
 | --- | ---: | ---: |
-| `4` (a pior) | 0.7320 | ± 0.0187 |
-| `64 → 32` (a melhor) | 0.7610 | ± 0.0148 |
-| **distância** | **0.0290** | **soma: 0.0335** |
+| `4` (a pior) | 0.7320 | ± 0.0147 |
+| `32 → 16` (a melhor) | 0.7570 | ± 0.0140 |
+| **distância** | **0.0250** | **soma: 0.0287** |
 
 A distância não cobre nem a soma dos erros. Se o par mais distante da tabela não se distingue, **nenhum par se distingue** — em acurácia, em AUC e em custo, as oito são a mesma medida vista oito vezes.
 
-E aí está o número que vale o comando inteiro: **58 parâmetros empatam com 15.745.** Uma regressão logística sem camada oculta nenhuma entrega a mesma acurácia que uma rede com 271× mais parâmetros. As camadas ocultas deste projeto não estão pagando o próprio custo, e a razão é a mesma que aparece em todo o resto da documentação: **o gargalo são as 1.000 linhas, não a capacidade.**
+E aí está o número que vale o comando inteiro: **58 parâmetros empatam com 15.745.** Uma regressão logística sem camada oculta nenhuma (0.7370) entrega a mesma acurácia que uma rede com 271× mais parâmetros (0.7460). As camadas ocultas deste projeto não estão pagando o próprio custo, e a razão é a mesma que aparece em todo o resto da documentação: **o gargalo são as 1.000 linhas, não a capacidade.**
 
 ### O que muda de verdade é quando o treino para
 
@@ -155,23 +157,26 @@ A única coluna que se move de forma sistemática é a das épocas:
 
 ```text
 regressão logística   40.0 épocas   ← nunca acionou o early stopping
-16 → 8                28.4
-32 → 16               21.4
-64 → 32               19.4
-128 → 64              12.0          ← para em menos de um terço do tempo
+4                     40.0          ← idem
+16 → 8                27.4
+32 → 16               19.2
+64 → 32               19.2
+128 → 64              13.0          ← para em um terço do tempo
 ```
 
 Quanto mais capacidade, **mais cedo o early stopping corta** — porque mais capacidade decora mais rápido, a `val_loss` vira mais cedo, e a paciência de 5 épocas se esgota antes. A rede de 15.745 parâmetros não é interrompida por ser boa; é interrompida por começar a decorar na época 7.
 
-O outro extremo diz o contrário e é honesto registrar: a regressão logística rodou as **40 épocas inteiras** sem nunca acionar a parada. Ela não convergiu — ela ficou sem orçamento. O empate dela com as outras é um empate com o treino truncado; dar-lhe mais épocas é um experimento que este comando ainda não faz.
+O outro extremo diz o contrário e é honesto registrar: a regressão logística e a rede de 4 unidades rodaram as **40 épocas inteiras** sem nunca acionar a parada. Elas não convergiram — ficaram sem orçamento. O empate delas com as outras é um empate com o treino truncado; dar-lhes mais épocas é um experimento que este comando ainda não faz.
 
 ### Então por que o padrão continua sendo 16 → 8
 
-Empate em acurácia não é empate em tudo. `16 → 8` tem o **menor custo médio** da tabela (94.4 ± 3.4) e o menor erro padrão junto — e custo, não acurácia, é a métrica que este projeto otimiza, porque é ela que carrega o `FN = 5 × FP` da [matriz oficial do dataset](metricas.md#-ajuste-do-limiar-de-decisão).
+Aqui vale registrar uma correção. A primeira versão desta seção justificava o padrão dizendo que `16 → 8` tinha o **menor custo médio** da tabela. Tinha, na medição anterior — a que escolhia o corte dentro da própria dobra. Com o corte calibrado fora, o menor custo passou para `32 → 16` (102.6 ± 6.2), e `16 → 8` ficou em terceiro (105.2 ± 6.4).
 
-Mesmo isso é frágil: 94.4 ± 3.4 contra 101.6 ± 5.9 do `64 → 32` é uma distância de 7.2 contra uma soma de erros de 9.3. **Também não se distingue.** O que a tabela autoriza a dizer é mais modesto do que "16 → 8 é a melhor":
+A vantagem, portanto, **era do protocolo, não da topologia** — e é o tipo de vantagem que some quando a medição melhora. Registrar isso vale mais do que ter acertado de primeira.
 
-> Entre oito topologias indistinguíveis, a escolhida é uma das menores, tem o melhor ponto estimado de custo e a menor dispersão. Na ausência de diferença medida, **o critério que sobra é o custo de manutenção** — e 1.073 parâmetros são mais baratos de treinar, servir e explicar que 15.745.
+O que sobra é honesto e mais modesto: 102.6 ± 6.2 contra 105.2 ± 6.4 é uma distância de 2.6 contra uma soma de erros de 12.6. **Não se distingue**, como nada nesta tabela se distingue. Então:
+
+> Entre oito topologias indistinguíveis em acurácia, em AUC e em custo, a escolhida é uma das menores. Na ausência de diferença medida, **o critério que sobra é o custo de manutenção** — e 1.073 parâmetros são mais baratos de treinar, servir e explicar que 15.745. Trocar por `32 → 16` seria trocar por ruído, que é exatamente o erro contra o qual o resto deste projeto argumenta.
 
 ### Os limites desta medição
 
@@ -370,6 +375,60 @@ Não havia o que frear — a diferença já era indistinguível de zero — e fr
 Três desfechos diferentes, todos coerentes com a mesma explicação: **regularização paga onde há capacidade sobrando, e cobra onde não há.** O German Credit com 1.073 parâmetros fica no meio-termo desconfortável em que ela não faz mal nem faz bem.
 
 > 🔬 Para reproduzir: `node index.js --l2=0 --dropout=0` desliga os dois freios e devolve exatamente a rede de antes deste item. A diferença treino − teste que o programa imprime volta a abrir.
+
+---
+
+## ⚖️ Peso por classe: o desbalanceamento atacado durante o treino
+
+O German Credit tem **30% de inadimplentes**. Uma rede treinada nessa proporção aprende, sem que ninguém lhe diga, que errar um inadimplente é barato — há menos deles, e a `loss` média mal sente. Até aqui o projeto corrigia isso **depois do fato**, no [ajuste do limiar](metricas.md#-ajuste-do-limiar-de-decisão): a rede aprende torta e o corte compensa.
+
+`--balancear` ataca antes, no `fit`, com peso por classe no estilo *balanced* — cada classe recebe `n / (k · n_c)`:
+
+```javascript
+{ 0: 1000 / (2 × 700) = 0.714,
+  1: 1000 / (2 × 300) = 1.667 }
+```
+
+As duas classes passam a somar o mesmo peso total: 700 × 0,714 e 300 × 1,667 dão 500 cada. Errar um positivo deixa de ser barato só por haver menos deles.
+
+```bash
+node index.js --balancear     # uma execução
+npm run cv -- --balancear     # 5 dobras, que é o que permite concluir algo
+```
+
+### O resultado é negativo
+
+Uma execução não distingue efeito de sorteio, então a comparação que vale é a de cinco dobras:
+
+| | sem `--balancear` | com `--balancear` |
+| --- | ---: | ---: |
+| Acurácia | **0.7360** ± 0.0126 | 0.6860 ± 0.0268 |
+| AUC | **0.7759** ± 0.0188 | 0.7524 ± 0.0220 |
+| Custo | **108.2** ± 7.0 | 114.4 ± 5.4 |
+| AUC fora da amostra (1.000 clientes) | **0.7723** | 0.7361 |
+| Razão de aprovação | **0.866** | 0.775 ⚠️ |
+
+A acurácia é a única coluna em que a diferença **passa** no teste dos erros padrão: 0.0500 de distância contra 0.0394 de soma. Não é ruído — o peso por classe deixa o modelo medivelmente pior. AUC e custo pioram também, mas dentro do ruído.
+
+E a auditoria piora junto: a razão de aprovação cai de 0,866 para 0,775 e **atravessa a regra dos quatro quintos**. Marcar mais gente como alto risco não afeta os dois grupos igualmente.
+
+### Por que piora
+
+Porque é a **segunda** correção para o mesmo problema, e as duas se anulam.
+
+Repare na coluna de limiares das dobras: sem balancear, os cortes escolhidos ficam entre `0.11` e `0.22`; com balancear, entre `0.26` e `0.46`. O peso por classe empurra as probabilidades para cima — a rede passa a achar todo mundo mais arriscado — e a calibração do limiar responde **subindo o corte na mesma medida**, para reencontrar o ponto de menor custo.
+
+O resultado líquido sobre a decisão é quase nulo, e o preço é real: a rede gastou capacidade aprendendo uma distribuição de classes que não é a do problema, e perdeu 5 pontos de acurácia por isso.
+
+> É o mesmo argumento que este projeto faz sobre o limiar, invertido. Ali, ajustar o corte é a correção **barata e certa**, porque não toca no que a rede aprendeu. Aqui, mexer no que ela aprende para corrigir algo que o corte já corrigia é pagar duas vezes pelo mesmo conserto.
+
+### O que isto não diz
+
+`classWeight` é **uma** das técnicas contra desbalanceamento, e a mais barata. Reamostragem, SMOTE e *focal loss* atacam o mesmo problema por caminhos diferentes e continuam sem medida neste projeto — o resultado acima não é evidência contra elas.
+
+E 30% não é um desbalanceamento severo. Em 1% de positivos — fraude, por exemplo — o corte sozinho pode não bastar, porque a rede pode nunca chegar a separar as classes. A conclusão aqui é local: **neste dataset, nesta proporção, com o limiar já ajustado, o peso por classe não paga o próprio custo.**
+
+Por isso o padrão é desligado — a mesma decisão, pelo mesmo motivo, que a [mitigação da disparidade](mitigacao.md#-mitigação-da-disparidade): a flag existe para que o preço possa ser medido, não para ser ligada sem medida.
 
 ---
 

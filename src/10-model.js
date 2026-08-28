@@ -90,24 +90,63 @@ const TRAINING = {
   patience: 5,
 };
 
-const fitModel = (model, xTrain, yTrain, options = {}) => model.fit(xTrain, yTrain, {
-  epochs: TRAINING.epochs,
-  batchSize: TRAINING.batchSize,
-  validationSplit: TRAINING.validationSplit,
-  shuffle: true,
-  callbacks: [
-    tf.callbacks.earlyStopping({
-      monitor: 'val_loss',
-      patience: TRAINING.patience,
-    }),
-  ],
-  ...options,
-});
+// Peso por classe no estilo "balanced": cada classe recebe n / (k · n_c).
+// Com 30% de inadimplentes, o positivo passa a valer ~1,67 e o negativo
+// ~0,71 — as duas classes somam o mesmo peso total, e errar um positivo
+// deixa de ser barato só por haver menos deles.
+//
+// É o único lugar do projeto em que o desbalanceamento é atacado DURANTE
+// o treino. O ajuste do limiar age depois, sobre uma rede que já
+// aprendeu de uma população torta; o peso muda o que ela aprende. São
+// correções diferentes para o mesmo problema, e por isso comparáveis.
+//
+// Devolve `null` quando uma das classes não aparece: um peso infinito
+// para a classe ausente não corrigiria nada e quebraria o treino.
+const balancedClassWeight = (labels) => {
+  const flat = labels.map((label) => (Array.isArray(label) ? label[0] : label));
+  const positives = flat.filter((risk) => risk === 1).length;
+  const negatives = flat.length - positives;
+
+  if (positives === 0 || negatives === 0) {
+    return null;
+  }
+
+  return {
+    0: flat.length / (2 * negatives),
+    1: flat.length / (2 * positives),
+  };
+};
+
+const fitModel = (model, xTrain, yTrain, options = {}) => {
+  // `validationSplit` e `validationData` são mutuamente exclusivos no
+  // tfjs. Quando quem chama traz o próprio conjunto de validação — e
+  // desde a fatia de calibração ele traz —, é ele que manda, e o corte
+  // automático dos últimos 20% sai de cena.
+  const { validationData, validationSplit, ...rest } = options;
+  const validacao = validationData
+    ? { validationData }
+    : { validationSplit: validationSplit ?? TRAINING.validationSplit };
+
+  return model.fit(xTrain, yTrain, {
+    epochs: TRAINING.epochs,
+    batchSize: TRAINING.batchSize,
+    ...validacao,
+    shuffle: true,
+    callbacks: [
+      tf.callbacks.earlyStopping({
+        monitor: 'val_loss',
+        patience: TRAINING.patience,
+      }),
+    ],
+    ...rest,
+  });
+};
 
 module.exports = {
   compileModel,
   createRegularizer,
   buildModel,
   TRAINING,
+  balancedClassWeight,
   fitModel,
 };

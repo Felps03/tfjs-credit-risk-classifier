@@ -6,7 +6,7 @@
 
 ## Cobertura da suíte
 
-São **403 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**:
+São **458 testes** no runner nativo do Node (`npm test`), sem dependência de desenvolvimento, escritos no formato **Given / When / Then**. Eles rodam em dois arquivos: `test/index.test.js` cobre o laboratório e o serviço em CommonJS; `test/web.test.mjs` cobre as funções puras da página, que são ESM:
 
 ```javascript
 it('dada a probabilidade exatamente no limiar, quando classificada, então retorna ALTO RISCO', () => {
@@ -58,6 +58,10 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | `formatMitigation` | Limiares, razão e custo das duas políticas na mesma tabela |
 | `resolveMitigation` | Ausência é desligado, `--mitigar` liga e **`--mitigar=false` lança em vez de ligar a política que o usuário quis desligar** |
 | `createGermanSource` | As duas variantes diferem só na codificação e a ordinal é alcançável por `--source` |
+| `splitCalibration` | A fatia é 20% do treino, as duas partes mantêm a proporção de classes, **nada se perde nem se repete**, e a fração explícita manda |
+| `balancedClassWeight` | As duas classes somam o mesmo peso total, o caso equilibrado é neutro, rótulos planos valem tanto quanto aninhados, e **classe ausente devolve `null` em vez de peso infinito** |
+| `resolveBalance` | Ausência é desligado, `--balancear` liga, e `--balancear=false` lança em vez de ligar o que o usuário quis desligar |
+| O marcador de módulo | `web/package.json` **não é servido em nenhuma grafia** — nem por `/../package.json`, nem percent-encoded —, e o teste confirma que o arquivo existe, para que a recusa seja uma decisão e não um 404 por acaso |
 | `parseGermanCsv`       | Texto bruto da UCI → clientes prontos, ponta a ponta |
 | `data/german-credit.csv` | O arquivo versionado tem as 1.000 linhas, **300 maus pagadores**, as 21 colunas declaradas e nenhum valor não-finito |
 | `fitMinMaxScaler` / `applyMinMaxScaler` | Mínimo e amplitude, coluna constante sem divisão por zero, valor fora da faixa **não** cortado, ordem do vetor e **ausência de vazamento do teste para a escala** |

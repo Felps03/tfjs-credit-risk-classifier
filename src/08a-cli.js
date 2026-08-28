@@ -155,6 +155,30 @@ const resolveArchitectureRun = (argv = []) => {
 // ou não olha. Um valor depois do sinal de igual é recusado de propósito
 // — aceitar `--mitigar=false` daria a impressão de que existe um terceiro
 // estado, e `--mitigar=0` ligaria a política que o usuário quis desligar.
+// `--balancear` liga o peso por classe DURANTE o treino. Desligado por
+// padrão pelo mesmo motivo que `--mitigar`: é uma mudança de política com
+// preço, e o projeto existe para que o preço possa ser medido antes de
+// alguém escolher pagá-lo.
+//
+// A leitura é a mesma do `--mitigar`, e recusar `--balancear=false` pelo
+// mesmo motivo: quem escreve isso quer DESLIGAR, e ligar em silêncio é a
+// pior resposta possível.
+const resolveBalance = (argv = []) => {
+  const flag = argv.find((argument) => argument.startsWith('--balancear'));
+
+  if (!flag) {
+    return false;
+  }
+
+  if (flag !== '--balancear') {
+    throw new Error(
+      `Use --balancear sem valor. Recebido: ${flag}.`,
+    );
+  }
+
+  return true;
+};
+
 const resolveMitigation = (argv = []) => {
   const flag = argv.find((argument) => argument.startsWith('--mitigar'));
 
@@ -194,4 +218,5 @@ module.exports = {
   resolveUnits,
   resolveArchitectureRun,
   resolveMitigation,
+  resolveBalance,
 };

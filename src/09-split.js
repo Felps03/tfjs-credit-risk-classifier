@@ -1,3 +1,5 @@
+const { CALIBRATION_SPLIT } = require('./00-constants');
+
 // --------------------------------------------------
 // 9. Separar treino e teste
 // --------------------------------------------------
@@ -63,6 +65,20 @@ const stratifiedSplitCustomers = (customers, trainRatio = 0.8) => {
   };
 };
 
+// Separa do TREINO a fatia que vai calibrar o limiar — e que também é a
+// validação do early stopping. Não toca no teste: é justamente por não
+// tocar nele que o número publicado deixa de ser otimista.
+//
+// Estratificada pelo mesmo motivo que o corte de fora: uma fatia de
+// calibração com metade dos inadimplentes do arquivo escolheria o corte
+// para uma população que não existe.
+const splitCalibration = (trainCustomers, calibrationRatio = CALIBRATION_SPLIT) => {
+  const { trainCustomers: fitCustomers, testCustomers: calibrationCustomers } =
+    stratifiedSplitCustomers(trainCustomers, 1 - calibrationRatio);
+
+  return { fitCustomers, calibrationCustomers };
+};
+
 // Atribui uma dobra a cada cliente, também mantendo a proporção de
 // classes. Distribuir em rodízio DENTRO de cada classe é o que garante
 // que nenhuma dobra fique com inadimplentes de menos — com 5 dobras e
@@ -97,6 +113,7 @@ module.exports = {
   shuffle,
   splitCustomers,
   stratifiedSplitCustomers,
+  splitCalibration,
   stratifiedFolds,
   splitDataset,
 };

@@ -9,11 +9,12 @@ const {
 } = require('./07-audit');
 const { evaluateModel, majorityBaseline } = require('./16a-evaluate');
 const { formatTable } = require('./13a-format');
-const { buildModel, fitModel } = require('./10-model');
+const { balancedClassWeight, buildModel, fitModel } = require('./10-model');
 const { computeRocCurve, rocFromScores } = require('./15-roc');
-const { shuffle, stratifiedFolds } = require('./09-split');
+const { shuffle, splitCalibration, stratifiedFolds } = require('./09-split');
 const { DEFAULT_SOURCE_ID, SOURCES } = require('./08-sources');
 const { createRandom } = require('./02-synthetic');
+const { computeConfusionMatrix } = require('./13-confusion');
 const {
   chooseThresholdByCost,
   FALSE_NEGATIVE_COST,
@@ -66,6 +67,12 @@ const crossValidate = async (source, options = {}) => {
     // de mais passos para sair do lugar. A documentação mede as duas
     // coisas, e este argumento é o que torna a segunda reproduzível.
     training = {},
+
+    // Peso por classe durante o treino, igual ao fluxo principal. Aqui
+    // ele importa duas vezes: `npm run cv -- --balancear` é a única
+    // medida honesta do efeito, porque uma execução só não distingue o
+    // efeito do sorteio.
+    balance = false,
     costs = {
       falsePositive: FALSE_POSITIVE_COST,
       falseNegative: FALSE_NEGATIVE_COST,
@@ -96,19 +103,51 @@ const crossValidate = async (source, options = {}) => {
     const scaler = source.fitScaler(trainCustomers);
     const toVector = (customer) => source.toVector(customer, scaler);
 
+    // A dobra de treino se parte de novo, pelo mesmo motivo do fluxo
+    // principal: o corte de menor custo não pode ser escolhido na dobra
+    // em que ele será medido. Sem isto, o `custo` de cada dobra é o custo
+    // do melhor corte POSSÍVEL naquela dobra — um número que nenhum
+    // modelo alcança em dado novo.
+    const { fitCustomers, calibrationCustomers } = splitCalibration(trainCustomers);
+
+    const fitLabels = fitCustomers.map(({ risk }) => [risk]);
+    const xFit = tf.tensor2d(fitCustomers.map(toVector));
+    const yFit = tf.tensor2d(fitLabels);
+    const xCal = tf.tensor2d(calibrationCustomers.map(toVector));
+    const yCal = tf.tensor2d(calibrationCustomers.map(({ risk }) => [risk]));
     const xTrain = tf.tensor2d(trainCustomers.map(toVector));
     const yTrain = tf.tensor2d(trainCustomers.map(({ risk }) => [risk]));
     const xTest = tf.tensor2d(testCustomers.map(toVector));
     const yTest = tf.tensor2d(testCustomers.map(({ risk }) => [risk]));
 
     const model = buildModel(source.featureNames.length, { units, l2, dropout });
+    const classWeight = balance ? balancedClassWeight(fitLabels) : null;
 
     // eslint-disable-next-line no-await-in-loop
-    const history = await fitModel(model, xTrain, yTrain, { verbose, ...training });
+    const history = await fitModel(model, xFit, yFit, {
+      verbose,
+      validationData: [xCal, yCal],
+      ...(classWeight === null ? {} : { classWeight }),
+      ...training,
+    });
 
     const { loss, accuracy } = evaluateModel(model, xTest, yTest);
+
+    // A AUC continua saindo do teste — ela não depende de limiar, então
+    // medi-la ali é legítimo. O CORTE sai da calibração, e o custo
+    // reportado é o desse corte aplicado ao teste.
     const roc = computeRocCurve(model, xTest, yTest);
-    const chosen = chooseThresholdByCost(roc, costs);
+    const calibrationRoc = computeRocCurve(model, xCal, yCal);
+    const threshold = chooseThresholdByCost(calibrationRoc, costs).threshold;
+
+    // O custo é o do corte escolhido APLICADO ao teste, contado na
+    // matriz — sem interpolar ponto de curva nenhum. É a diferença entre
+    // "quanto custaria o melhor corte desta dobra" (a pergunta errada,
+    // que não se responde antes de ver a dobra) e "quanto custou o corte
+    // que eu tinha como escolher".
+    const testConfusion = computeConfusionMatrix(model, xTest, yTest, threshold);
+    const cost = testConfusion.falsePositives * costs.falsePositive
+      + testConfusion.falseNegatives * costs.falseNegative;
 
     const foldScores = tf.tidy(() =>
       Array.from(model.predict(xTest).reshape([-1]).dataSync()));
@@ -138,11 +177,11 @@ const crossValidate = async (source, options = {}) => {
       loss,
       accuracy,
       auc: roc.auc,
-      threshold: chosen.threshold,
-      cost: chosen.cost,
+      threshold,
+      cost,
     });
 
-    tf.dispose([xTrain, yTrain, xTest, yTest]);
+    tf.dispose([xFit, yFit, xCal, yCal, xTrain, yTrain, xTest, yTest]);
     model.dispose();
   }
 

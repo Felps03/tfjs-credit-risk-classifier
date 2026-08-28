@@ -81,11 +81,13 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `L2_LAMBDA`, `DROPOUT_RATE` | constantes | Intensidade padrão dos dois freios contra overfitting |
 | `parseNumericFlag`, `resolveRegularization` | funções | Leitura validada de `--l2=` e `--dropout=`; devolve só o que foi pedido, para a fonte manter o resto |
 | `resolveMitigation` | função | Leitura de `--mitigar`: interruptor sem valor, e recusa `--mitigar=false` em vez de adivinhar |
+| `resolveBalance` | função | Leitura de `--balancear`: liga o peso por classe no treino, com a mesma recusa a `=false` |
 | `resolveUnits` | função | Leitura de `--units=64,32`; `--units=0` pede a regressão logística e vazio é erro |
 | `resolveArchitectureRun` | função | Leitura de `--arquiteturas` e `--repeticoes=k` |
 | `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
 | `splitCustomers` | função | Divide clientes **brutos** em treino e teste, por fatiamento simples |
 | `stratifiedSplitCustomers` | função | O mesmo, preservando a proporção de classes — é o que `main` usa |
+| `splitCalibration`, `CALIBRATION_SPLIT` | função / constante | A fatia do treino que valida o early stopping e **escolhe o limiar**; é o que impede que o corte nasça no conjunto em que será medido |
 | `stratifiedFolds` | função | Atribui uma dobra a cada cliente, mantendo a proporção de classes |
 | `majorityBaseline` | função | Piso da acurácia: sempre chutar a classe majoritária |
 | `compileModel` | função | Aplica optimizer, loss e métricas a um modelo |
@@ -115,7 +117,8 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `formatTable` | função | Cabeçalho + linhas → tabela alinhada |
 | `formatThresholdComparison` | função | Candidatos → tabela comparativa de limiares |
 | `evaluateModel` | função | Roda `evaluate` e devolve `{ loss, accuracy }` |
-| `TRAINING`, `fitModel` | constante / função | A configuração de treino em um lugar só, usada pelos dois caminhos |
+| `TRAINING`, `fitModel` | constante / função | A configuração de treino em um lugar só, usada pelos dois caminhos; aceita `validationData` no lugar do corte automático, e os dois são mutuamente exclusivos no tfjs |
+| `balancedClassWeight` | função | Peso por classe no estilo *balanced* (`n / (k · n_c)`); devolve `null` quando uma classe não aparece, porque peso infinito não corrige nada |
 | `CV_FOLDS`, `resolveFolds` | constante / função | Padrão de dobras e leitura de `--cv` / `--cv=k` |
 | `summarize` | função | Valores → `{ mean, standardError, lowest, highest }` |
 | `crossValidate` | função async | k dobras estratificadas → métricas por dobra, resumo, scores fora da amostra e auditoria dos 1.000 |

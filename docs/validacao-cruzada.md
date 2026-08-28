@@ -68,18 +68,20 @@ Validação cruzada estratificada: 5 dobras
 
 Dobra | Treino | Teste | Baseline | Acurácia |      AUC | Limiar | Custo
 ------+--------+-------+----------+----------+----------+--------+------
-1     |    800 |   200 |   0.7000 |   0.7400 |   0.7855 | 0.1777 |    92
-2     |    800 |   200 |   0.7000 |   0.6900 |   0.7065 | 0.0983 |   113
-3     |    800 |   200 |   0.7000 |   0.7800 |   0.7954 | 0.1560 |   105
-4     |    800 |   200 |   0.7000 |   0.7300 |   0.7779 | 0.2100 |    95
-5     |    800 |   200 |   0.7000 |   0.7800 |   0.8230 | 0.2261 |    84
-Média |        |       |   0.7000 |   0.7440 |   0.7776 |        |  97.8
-Erro  |        |       | ± 0.0000 | ± 0.0169 | ± 0.0193 |        | ± 5.1
+1     |    800 |   200 |   0.7000 |   0.7500 |   0.7965 | 0.2107 |   102
+2     |    800 |   200 |   0.7000 |   0.6950 |   0.7027 | 0.1722 |   134
+3     |    800 |   200 |   0.7000 |   0.7700 |   0.8035 | 0.1105 |   104
+4     |    800 |   200 |   0.7000 |   0.7250 |   0.7776 | 0.1263 |   109
+5     |    800 |   200 |   0.7000 |   0.7400 |   0.7990 | 0.2223 |    92
+Média |        |       |   0.7000 |   0.7360 |   0.7759 |        | 108.2
+Erro  |        |       | ± 0.0000 | ± 0.0126 | ± 0.0188 |        | ± 7.0
 
-AUC sobre o dataset inteiro (curva única, score fora da amostra): 0.7714
+AUC sobre o dataset inteiro (curva única, score fora da amostra): 0.7723
 ```
 
-A dobra 2 acerta `0.6900` — **abaixo do baseline**. A dobra 5 acerta `0.7800`. São o mesmo código, o mesmo dataset e a mesma configuração; a diferença de nove pontos é inteiramente o sorteio de quais 200 clientes ficaram de fora. Reportar qualquer uma delas sozinha seria reportar ruído com quatro casas decimais.
+A dobra 2 acerta `0.6950` — **abaixo do baseline**. A dobra 3 acerta `0.7700`. São o mesmo código, o mesmo dataset e a mesma configuração; a diferença de sete pontos e meio é inteiramente o sorteio de quais 200 clientes ficaram de fora. Reportar qualquer uma delas sozinha seria reportar ruído com quatro casas decimais.
+
+**A coluna `Custo` mudou de significado, e a mudança vale um parágrafo.** Ela já foi o custo do melhor corte *daquela dobra*, escolhido na própria dobra de teste — um número que nenhum modelo alcança em dado novo. Agora a dobra de treino se parte outra vez: o corte sai de uma [fatia de calibração](metricas.md#onde-o-corte-é-escolhido) de 160 clientes, e o custo reportado é o desse corte **aplicado** à dobra de teste. É por isso que os custos desta tabela são ~10% mais altos que os da versão anterior deste documento, sem que nenhum modelo tenha piorado: o que sumiu foi o otimismo, não o desempenho.
 
 Dois detalhes que não são decorativos:
 

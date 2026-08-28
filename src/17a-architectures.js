@@ -44,6 +44,7 @@ const compareArchitectures = async (source, options = {}) => {
     l2,
     dropout,
     training = {},
+    balance = false,
     verbose = 0,
   } = options;
 
@@ -57,7 +58,7 @@ const compareArchitectures = async (source, options = {}) => {
     for (let repeat = 0; repeat < repeats; repeat += 1) {
       // eslint-disable-next-line no-await-in-loop
       const result = await crossValidate(source, {
-        folds, units, l2, dropout, training, verbose, seed: seed + repeat,
+        folds, units, l2, dropout, training, balance, verbose, seed: seed + repeat,
       });
 
       parameters = result.parameters;

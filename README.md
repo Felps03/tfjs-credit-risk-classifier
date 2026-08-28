@@ -76,7 +76,13 @@ const classify = (probability) =>
   (probability >= DECISION_THRESHOLD ? 'ALTO RISCO' : 'BAIXO RISCO');
 ```
 
-Meio a meio é o corte de quem não sabe o preço de errar. **Este projeto sabe**: no German Credit, deixar passar um inadimplente custa **5×** o que custa recusar um bom pagador, e é a matriz de custo oficial do dataset que diz isso. Com essa assimetria, o corte de menor custo cai para perto de **`0.22`** — a rede passa a sinalizar mais, troca falsos negativos caros por falsos positivos baratos, e o custo total do hold-out sai de **180 para 107**.
+Meio a meio é o corte de quem não sabe o preço de errar. **Este projeto sabe**: no German Credit, deixar passar um inadimplente custa **5×** o que custa recusar um bom pagador, e é a matriz de custo oficial do dataset que diz isso. Com essa assimetria o corte desce — a rede passa a sinalizar mais, trocando falsos negativos caros por falsos positivos baratos.
+
+E ele desce **onde pode**: numa fatia de calibração separada do treino, que o teste nunca vê. Escolher o corte no mesmo conjunto em que ele é medido publica um número que não se sustenta, e este projeto fazia exatamente isso até pouco tempo atrás. A diferença aparece impressa em toda execução:
+
+```text
+Custo por cliente: 0.406 na calibração (onde o corte foi escolhido) · 0.520 no teste (onde ele vale).
+```
 
 Por isso o limiar é [medido e gravado no pacote](docs/metricas.md#-ajuste-do-limiar-de-decisão) a cada treino, viaja junto dos pesos e é devolvido em toda resposta da API. Ele é uma **escolha de negócio**, não uma verdade do modelo — e uma escolha que muda de valor quando os dados mudam é uma escolha que não pode ficar chumbada no código.
 
@@ -137,6 +143,15 @@ npm run arquiteturas               # da regressão logística à rede de 15.745 
 
 O [resultado](docs/modelo.md#-comparando-arquiteturas) é a parte interessante: as oito **empatam**. Uma regressão logística de 58 parâmetros, sem camada oculta nenhuma, entrega a mesma acurácia que a rede 271× maior — porque o gargalo são as 1.000 linhas, não a capacidade.
 
+O desbalanceamento — 30% de inadimplentes — também é atacável durante o treino, e não só depois dele pelo limiar:
+
+```bash
+node index.js --balancear        # peso por classe no `fit`
+npm run cv -- --balancear        # o efeito medido em 5 dobras, que é o que vale
+```
+
+O [resultado é negativo e vale a leitura](docs/modelo.md#-peso-por-classe-o-desbalanceamento-atacado-durante-o-treino): a acurácia **cai** de forma medível e o custo não melhora. O padrão é desligado por isso.
+
 E a disparidade medida pela auditoria pode ser **corrigida** em vez de só reportada, com um limiar por grupo calibrado no treino:
 
 ```bash
@@ -173,8 +188,8 @@ curl -X POST localhost:3000/risk-score -H 'content-type: application/json' -d '{
 ```
 
 ```json
-{ "riskProbability": 0.804617, "classification": "HIGH_RISK", "threshold": 0.225002,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" } }
+{ "riskProbability": 0.741019, "classification": "HIGH_RISK", "threshold": 0.158696,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T10:47:53.549Z" } }
 ```
 
 A parte difícil de servir um modelo não é o HTTP — é que os pesos sozinhos não bastam. [A seção sobre o serviço](docs/servico.md#-o-problema-que-a-api-expõe) mostra por quê.
@@ -259,7 +274,7 @@ npm test           # roda a suíte uma vez
 npm run test:watch # re-executa a cada alteração
 ```
 
-São **403 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
+São **458 testes** no runner nativo do Node (`node:test` + `node:assert`) — nenhuma dependência de desenvolvimento —, escritos em **Given / When / Then**. A [tabela de cobertura completa](docs/testes.md), alvo por alvo, está na documentação.
 
 > ⛔ Se o `npm install` ou o `npm start` quebrarem, o culpado quase sempre é a versão do Node: veja [Solução de problemas](docs/testes.md#-solução-de-problemas).
 
@@ -288,10 +303,10 @@ As sete numéricas em unidades brutas e as doze qualitativas como índice do có
 
 ```json
 {
-  "riskProbability": 0.804617,
+  "riskProbability": 0.741019,
   "classification": "HIGH_RISK",
-  "threshold": 0.225002,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" }
+  "threshold": 0.158696,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T10:47:53.549Z" }
 }
 ```
 
@@ -304,7 +319,7 @@ flowchart LR
     V -->|"não"| X(["📤 400<br/>lista de erros"])
     V -->|"sim"| C["⚙️ Pré-processamento<br/>scaler do metadata.json"]
     C --> D["🧠 Modelo carregado<br/>tf.loadLayersModel"]
-    D --> E["📈 Probabilidade<br/>0.804617"]
+    D --> E["📈 Probabilidade<br/>0.741019"]
     E --> F(["📤 200<br/>HIGH_RISK"])
 
     classDef edge fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
@@ -340,11 +355,10 @@ Coisas deliberadamente simplificadas — cada uma é um bom exercício de corre�
 | Mitigação limitada à **paridade demográfica**                    | Igualar aprovação é um critério entre vários; igualar FNR ou odds daria outra política, e as duas não podem valer juntas com taxas-base diferentes |
 | Nada é feito contra o **vazamento do atributo protegido**         | O sexo é previsível a partir das features do modelo com AUC `0.699`; a mitigação compensa o efeito no fim da linha, sem remover a causa |
 | CSV sem validação de esquema, faixas ou valores ausentes        | Dado real vem com coluna faltando, texto onde deveria haver número e `NaN` |
-| Limiar escolhido no **mesmo** conjunto em que é medido           | Calibrar e avaliar no mesmo hold-out otimiza para aquele split; o certo é um conjunto de validação separado. A [mitigação](docs/mitigacao.md#-mitigação-da-disparidade) já faz certo — calibra no treino, audita no teste —, o ajuste do limiar ainda não |
 | Custos de FP e FN fixos no código (`1` e `5`)                    | Aqui vêm da matriz oficial do dataset; em produção viriam de ticket médio, taxa de recuperação e margem |
 | `npm start` continua reportando **uma** divisão                  | O relatório completo — matriz, curva, limiar, auditoria — roda sobre um hold-out só, e a divisão fixa é reconhecidamente ruim. A estimativa honesta está a um comando de distância ([`npm run cv`](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado)), mas não é o padrão |
 | Regularização escolhida em uma grade medida no **mesmo** protocolo de avaliação | Trinta configurações comparadas sem conjunto de validação separado; o certo seria escolher em um conjunto e reportar em outro — o mesmo problema do [limiar](docs/metricas.md#-ajuste-do-limiar-de-decisão), algumas linhas acima |
-| Nenhum tratamento para o **desbalanceamento** durante o treino   | O dataset agora tem 15,8% de positivos, mas o treino não usa `classWeight`, reamostragem nem *focal loss*; a única correção aplicada é [no limiar](docs/metricas.md#-ajuste-do-limiar-de-decisão), depois do fato |
+| Tratamento do **desbalanceamento** limitado a `classWeight`      | `--balancear` existe e está [medido](docs/modelo.md#-peso-por-classe-o-desbalanceamento-atacado-durante-o-treino) — o resultado é pior, e por isso o padrão é desligado. Reamostragem, SMOTE e *focal loss* continuam sem medida |
 | Ruído sintético **normal e independente** por coluna             | Erro real é enviesado (renda é subdeclarada, não sorteada em torno da verdade) e correlacionado entre colunas |
 | Ruído de rótulo **simétrico**                                    | Na prática um mau pagador registrado como bom é bem mais comum que o contrário |
 
@@ -362,6 +376,8 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 | ~~Split simples em vez de estratificado~~ | [`stratifiedSplitCustomers`](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado): o baseline do teste passou a sair `0.7000` em **todas** as divisões |
 | ~~Sem validação cruzada~~ | `npm run cv`: k dobras estratificadas, média com erro padrão, e a auditoria de disparidade rodando sobre os 1.000 clientes |
 | ~~Modelo salvo sem versionar o scaler junto~~ | [`metadata.json`](docs/servico.md#-a-correção-o-modelo-como-pacote): escala, ordem das features e limiar viajam com os pesos, e a carga recusa o pacote se qualquer um dos três não bater |
+| ~~Limiar escolhido no mesmo conjunto em que é medido~~ | [Fatia de calibração](docs/metricas.md#onde-o-corte-é-escolhido): o treino se parte em 640 para ajustar os pesos e 160 para escolher o corte, e o teste só é tocado na hora de reportar. Vale para o fluxo principal **e** para cada dobra da validação cruzada |
+| ~~A camada da página sem teste nenhum~~ | `web/package.json` declara os módulos como ESM, e as funções puras de `mappers.js` e `domain.js` passaram a ser cobertas pelo mesmo `npm test` — sem build e sem dependência |
 
 ---
 

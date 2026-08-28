@@ -37,7 +37,33 @@ const SYNTHETIC_FEATURE_NOISE = 0.05;
 const SYNTHETIC_LABEL_NOISE = 0.02;
 
 // Limiar de decisão do classificador: escolha de negócio, não do modelo.
+//
+// Este é o corte PADRÃO — o ponto de partida de quem não sabe o preço de
+// errar. O corte que o projeto realmente serve sai da matriz de custo, é
+// medido a cada treino e viaja no pacote. Ver `16-threshold.js`.
 const DECISION_THRESHOLD = 0.5;
+
+// Quanto do TREINO é reservado para calibrar o limiar.
+//
+// É a correção de um erro que estava na conta desde o começo: a curva ROC
+// era montada sobre o conjunto de TESTE, o corte de menor custo era
+// escolhido nela, e a matriz publicada era recalculada no mesmo teste.
+// Escolher e medir no mesmo lugar otimiza para aquele sorteio — o número
+// sai bom sem que nada quebre, que é a assinatura de todo erro caro deste
+// projeto.
+//
+// A fatia não é nova: `model.fit` já reservava exatamente estes 20% para
+// o early stopping, só que invisíveis dentro do `validationSplit`. Agora
+// ela é separada antes, tem nome, e ganha uma segunda função legítima —
+// escolher o corte. O teste volta a ser o que deveria ter sido sempre:
+// intocado até a hora de reportar.
+//
+// Sobra uma reutilização, e ela é declarada em vez de escondida: o mesmo
+// conjunto decide QUANDO o treino para e ONDE o corte cai. Com 1.000
+// linhas, gastar mais uma fatia de 200 para separar as duas coisas custa
+// mais em capacidade do que rende em rigor — a comparação de arquiteturas
+// mostra que o gargalo é o dado.
+const CALIBRATION_SPLIT = 0.2;
 
 // Regularização: os dois freios contra decorar o treino.
 //
@@ -197,6 +223,7 @@ module.exports = {
   SYNTHETIC_FEATURE_NOISE,
   SYNTHETIC_LABEL_NOISE,
   DECISION_THRESHOLD,
+  CALIBRATION_SPLIT,
   L2_LAMBDA,
   DROPOUT_RATE,
   HIDDEN_UNITS,

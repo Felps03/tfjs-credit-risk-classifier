@@ -70,7 +70,7 @@ model/
 ```json
 {
   "version": 1,
-  "savedAt": "2026-08-28T04:07:00.306Z",
+  "savedAt": "2026-08-28T10:47:53.549Z",
   "source": "german",
   "encoding": "onehot",
   "featureNames": ["durationMonths", "creditAmount", "…", "foreignWorker=A202"],
@@ -79,9 +79,10 @@ model/
     "min":   { "durationMonths": 4,  "creditAmount": 250,   "age": 19 },
     "range": { "durationMonths": 68, "creditAmount": 18174, "age": 56 }
   },
-  "threshold": 0.225002,
-  "thresholdStrategy": "menor custo (FP=1, FN=5)",
-  "training": { "customers": 800, "units": [16, 8], "l2": 0.003, "dropout": 0.2 }
+  "threshold": 0.158696,
+  "thresholdStrategy": "menor custo (FP=1, FN=5) em 160 clientes de calibração",
+  "training": { "customers": 800, "fitCustomers": 640, "calibrationCustomers": 160,
+                "balanced": false, "units": [16, 8], "l2": 0.003, "dropout": 0.2 }
 }
 ```
 
@@ -91,7 +92,7 @@ Quatro coisas que os pesos sozinhos não dizem:
 | ----- | ------- |
 | `scaler` | O serviço normaliza diferente do treino. É o *skew*. |
 | `featureNames` | A ordem das 57 entradas é o que liga cada valor ao peso certo. Trocar duas de lugar não dá erro nenhum. |
-| `threshold` | `0.31` não significa nada sem o corte. O laboratório **escolhe** o corte pela matriz de custo; servir com `0.5` jogaria fora essa escolha. |
+| `threshold` | `0.31` não significa nada sem o corte. O laboratório **escolhe** o corte pela matriz de custo, numa [fatia de calibração separada do teste](metricas.md#onde-o-corte-é-escolhido); servir com `0.5` jogaria fora essa escolha. |
 | `source` / `encoding` | Qual fonte e qual codificação reconstroem o `toVector` certo. |
 
 E quem serve não precisa saber que nada disso existe:
@@ -146,14 +147,14 @@ As sete numéricas em unidades **brutas** e as doze qualitativas como **índice 
 
 ```json
 {
-  "riskProbability": 0.804617,
+  "riskProbability": 0.741019,
   "classification": "HIGH_RISK",
-  "threshold": 0.225002,
-  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T04:07:00.306Z" }
+  "threshold": 0.158696,
+  "model": { "source": "german", "features": 57, "savedAt": "2026-08-28T10:47:53.549Z" }
 }
 ```
 
-O limiar viaja na resposta porque ele é uma **escolha de negócio**, não uma propriedade do modelo: sem ele, `0.80` não diz se o cliente foi aprovado. E ele não é o `0.5` herdado — é o `0.225002` que a matriz de custo escolheu, gravado no pacote.
+O limiar viaja na resposta porque ele é uma **escolha de negócio**, não uma propriedade do modelo: sem ele, `0.74` não diz se o cliente foi aprovado. E ele não é o `0.5` herdado — é o `0.158696` que a matriz de custo escolheu **numa fatia de calibração que o teste nunca viu**, gravado no pacote.
 
 > A probabilidade e o limiar são arredondados na **mesma** casa (6). Arredondar só um dos dois produziria, na fronteira, um JSON que se contradiz: `riskProbability` igual ao `threshold` e classificação `LOW_RISK`.
 
@@ -164,7 +165,7 @@ Descobrir o contrato batendo no `400` é um jeito ruim de integrar, então o ser
 ```json
 {
   "source": "german",
-  "threshold": 0.225002,
+  "threshold": 0.158696,
   "request": {
     "numeric": ["durationMonths", "creditAmount", "installmentRate", "…"],
     "categorical": {
@@ -251,12 +252,12 @@ Dois detalhes que só aparecem quando se escreve o servidor à mão:
 ```text
 DADOS UTILIZADOS          PROCESSAMENTO                    RESULTADOS DA ANÁLISE
 
-Prazo do contrato  ──┐   Preparo   oculta 1   oculta 2       Risco de inadimplência  80,5%
+Prazo do contrato  ──┐   Preparo   oculta 1   oculta 2       Risco de inadimplência  74,1%
 Valor do crédito   ──┤                                       ████████████████████░░░░░
-Idade              ──┼──▶  ○ ──────  ○ ────────  ○ ──┐          ┆ limiar 22,5%
+Idade              ──┼──▶  ○ ──────  ○ ────────  ○ ──┐        ┆ limiar 15,9%
 Conta corrente     ──┤   min–max     ○           ○   ├──▶ ○ ──▶
 Finalidade         ──┤                ○          ○   │  sigmoide   Probabilidade de adimplência
-Moradia            ──┴──▶  ○ ──────   ○ ─────────────┘                                19,5%
+Moradia            ──┴──▶  ○ ──────   ○ ─────────────┘                                25,9%
                          one-hot                             █████░░░░░░░░░░░░░░░░░░░░
 ```
 
@@ -283,7 +284,7 @@ Passar o mouse (ou o foco do teclado) por uma linha acende o caminho daquele cam
 
 Os 19 campos são **editáveis**, e cada alteração repontua. Mudar a conta corrente de "saldo negativo" para "200 DM ou mais" derruba o risco na hora — é a variável mais forte do German Credit, e vê-la mexer explica mais do que qualquer tabela de pesos.
 
-O número não troca de golpe: ele **rola** até o valor novo. Não é enfeite. Repontuando a cada tecla, um texto que pisca de 80,5% para 75,1% não deixa ver que *direção* a mudança tomou — e a direção é a informação. Rolando, dá para ver qual campo subiu o risco.
+O número não troca de golpe: ele **rola** até o valor novo. Não é enfeite. Repontuando a cada tecla, um texto que pisca de 74,1% para 68,9% não deixa ver que *direção* a mudança tomou — e a direção é a informação. Rolando, dá para ver qual campo subiu o risco.
 
 **Nenhum campo é escrito à mão na página.** O tipo de cada controle sai do contrato: as sete numéricas viram `<input type="number">`, as doze qualitativas viram `<select>` cujas opções são os códigos do `GET /schema` traduzidos pelo dicionário de domínio. Um retreino que mude as colunas muda o formulário sozinho.
 
@@ -377,27 +378,30 @@ Um pacote salvo antes disso devolve o bloco sem `history`, e a tela diz isso em 
 O terceiro modo responde a pergunta que os outros dois não respondem: **o modelo presta?**
 
 ```text
-   Padrão (0.5)      │  Youden (max J)   │  ▸ Menor custo
-   custo 180          │  custo 127         │  custo 107
+   Padrão (0.5)      │  Youden (max J)   │  ▸ Menor custo      ← medidos nos 160
+   custo 165          │  custo 82          │  custo 65            de CALIBRAÇÃO
 
   QUANTO ELE ACERTA        ONDE ELE ERRA            QUEM ELE PENALIZA
+                           (200 de teste)
 
-  A rede         72,0%     73 TN   │   67 FP        Mulheres      n=66
-  ██████████████░░░░       ────────┼────────        marcados  65,2% ████████
-  Chutar         70,0%      8 FN   │   52 TP        real      30,3% ████
+  A rede         72,5%     61 TN   │   79 FP        Mulheres      n=66
+  ██████████████░░░░       ────────┼────────        marcados  72,7% █████████
+  Chutar         70,0%      5 FN   │   55 TP        real      30,3% ████
   █████████████░░░░░                                Homens        n=134
-                           precision 43,7%          marcados  56,7% ██████
-  AUC 0,7417               recall    86,7%          real      29,9% ████
-  treino−teste 7,6%        F1        58,1%          razão de aprovação 0,805
+                           precision 41,0%          marcados  64,2% ████████
+  AUC 0,7480               recall    91,7%          real      29,9% ████
+  treino−teste 7,0%        F1        56,7%          razão de aprovação 0,761 ⚠️
 ```
 
-**A acurácia nunca aparece sozinha.** Ela aparece encostada no piso da classe majoritária — a taxa de quem chuta "bom pagador" para todo mundo sem olhar para nenhuma feature. 72% parece ótimo até estar ao lado de 70%, e a distância entre os dois é tudo que o treino acrescentou. Publicar um sem o outro seria publicar meia verdade.
+**A faixa do topo e a matriz falam de conjuntos diferentes, e é de propósito.** Os três custos são da calibração, onde o corte foi escolhido; a matriz é do teste, onde ele vale. Se batessem, seria porque o corte foi escolhido no mesmo lugar em que é medido — e a tela diz isso em texto, embaixo da faixa, em vez de deixar a diferença parecer um erro de conta.
 
-**Os dois erros não custam igual, e a matriz mostra isso.** Recusar quem pagaria (FP) custa 1; deixar passar quem não paga (FN) custa 5. É essa assimetria que puxou o limiar de 0,5 para 0,225 — e a faixa do topo mostra os três cortes candidatos com o preço de cada um, com o que está decidindo em destaque. É a única parte da tela em que o limiar deixa de ser um número dado e vira uma **escolha com alternativas**.
+**A acurácia nunca aparece sozinha.** Ela aparece encostada no piso da classe majoritária — a taxa de quem chuta "bom pagador" para todo mundo sem olhar para nenhuma feature. 72,5% parece ótimo até estar ao lado de 70%, e a distância entre os dois é tudo que o treino acrescentou. Publicar um sem o outro seria publicar meia verdade.
+
+**Os dois erros não custam igual, e a matriz mostra isso.** Recusar quem pagaria (FP) custa 1; deixar passar quem não paga (FN) custa 5. É essa assimetria que puxou o limiar de 0,5 para 0,159 — a rede passou a marcar 134 dos 200 clientes como alto risco e a deixar passar só 5 dos 60 inadimplentes. A faixa do topo mostra os três cortes candidatos com o preço de cada um, com o que está decidindo em destaque. É a única parte da tela em que o limiar deixa de ser um número dado e vira uma **escolha com alternativas**.
 
 **A auditoria fecha o argumento do `personalStatus`.** A tela já dizia, na coluna de entrada, que o campo é recusado porque "a auditoria usa essa coluna; a decisão, não". Faltava mostrar a auditoria. Agora ela está lá: taxa de marcação por grupo ao lado da inadimplência real do grupo, os inadimplentes que passaram batido, e a razão de aprovação com o veredito da regra dos quatro quintos.
 
-As manchetes desses modos citam números — "Acertar 72% parece bom. Chutar acerta 70%" — e **são montadas a partir do pacote carregado**, não escritas à mão. Um retreino muda os números na tela e no texto junto; escrevê-los à mão faria a página mentir na primeira vez que alguém rodasse `npm start`.
+As manchetes desses modos citam números — "Acertar 73% parece bom. Chutar acerta 70%" — e **são montadas a partir do pacote carregado**, não escritas à mão. Um retreino muda os números na tela e no texto junto; escrevê-los à mão faria a página mentir na primeira vez que alguém rodasse `npm start`.
 
 ### O que o pacote passou a guardar
 
@@ -405,17 +409,19 @@ Assim como o histórico de treino, tudo isto era calculado, impresso no terminal
 
 ```json
 "evaluation": {
-  "baseline": 0.7, "testAccuracy": 0.72, "trainAccuracy": 0.7962,
-  "testLoss": 0.536, "testCustomers": 200, "auc": 0.7417,
-  "confusion": { "truePositives": 52, "trueNegatives": 73,
-                 "falsePositives": 67, "falseNegatives": 8 },
-  "metrics":   { "precision": 0.437, "recall": 0.8667, "f1Score": 0.581 },
+  "baseline": 0.7, "testAccuracy": 0.725, "trainAccuracy": 0.795,
+  "testLoss": 0.5293, "testCustomers": 200, "auc": 0.748,
+  "confusion": { "truePositives": 55, "trueNegatives": 61,
+                 "falsePositives": 79, "falseNegatives": 5 },
+  "metrics":   { "precision": 0.4104, "recall": 0.9167, "f1Score": 0.567 },
   "costs":     { "falsePositive": 1, "falseNegative": 5 },
-  "thresholds": [ { "label": "Menor custo", "threshold": 0.225, "cost": 107 } ],
+  "thresholds": [ { "label": "Menor custo", "threshold": 0.1587, "cost": 65 } ],
   "audit": { "politica": "Limiar único", "women": {…}, "men": {…},
-             "approvalRatio": 0.805 }
+             "approvalRatio": 0.761 }
 }
 ```
+
+Um detalhe de leitura que vale registro: `confusion` e `metrics` são do **teste**, e `thresholds` é da **calibração**. São conjuntos diferentes porque fazem trabalhos diferentes — escolher o corte e medi-lo —, e é por isso que os FP e FN dos dois blocos não coincidem.
 
 Duas escolhas que valem registro. A matriz gravada é a do limiar **escolhido**, não a do `0.5` herdado — era a única que existia apenas dentro de um `console.log`. E um limiar `Infinity` (o ponto da ROC que não aprova ninguém) é gravado como `null` de propósito: `JSON.stringify` já o transformaria em `null` de qualquer forma, e um número falso no lugar seria pior.
 

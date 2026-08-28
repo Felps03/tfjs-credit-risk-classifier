@@ -394,6 +394,12 @@ export const toEvaluation = (schema) => {
 
     metrics,
     costs: avaliacao.costs,
+
+    // Onde os três cortes foram medidos. Sem este número a faixa do topo
+    // diria "custo 65" ao lado de uma matriz de teste que custa 104, e
+    // pareceria contradição — quando é justamente a separação entre
+    // escolher e medir funcionando.
+    calibrationCustomers: schema.training?.calibrationCustomers ?? null,
     thresholds,
 
     confusion: [

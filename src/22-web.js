@@ -77,10 +77,25 @@ const resolveAsset = (pathname, root = WEB_DIR) => {
 
 // Devolve o arquivo pronto para a resposta, ou `null` para "não é meu" —
 // e é esse `null` que devolve a palavra ao 404 do roteador.
+// O `web/package.json` existe para o Node, não para o navegador: ele diz
+// que os módulos de `web/js/` são ESM, e é o que permite testá-los sem
+// build. Ele não faz parte da página, então não é servido.
+//
+// A lista é comparada com o caminho RESOLVIDO, e não com o pathname cru.
+// Comparar com o cru seria contornável pela primeira grafia diferente que
+// alguém tentasse — `/../package.json` e `/%2e%2e/package.json` chegam
+// aqui como texto diferente e terminam no mesmo arquivo, que é
+// precisamente o que a normalização existe para garantir.
+const NAO_SERVIDOS = new Set(['package.json']);
+
 const readAsset = (pathname, root = WEB_DIR) => {
   const resolved = resolveAsset(pathname, root);
 
-  if (resolved === null || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+  if (resolved === null || NAO_SERVIDOS.has(path.relative(root, resolved))) {
+    return null;
+  }
+
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
     return null;
   }
 
@@ -102,6 +117,7 @@ const createWebHandler = (root = WEB_DIR) => (req, pathname) => {
 
 module.exports = {
   WEB_DIR,
+  NAO_SERVIDOS,
   CONTENT_TYPES,
   contentType,
   withIndex,

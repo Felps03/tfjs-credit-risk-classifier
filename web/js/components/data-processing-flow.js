@@ -304,7 +304,10 @@ export class DataProcessingFlow extends HTMLElement {
   // única parte da tela em que o limiar deixa de ser um número dado e
   // passa a ser uma ESCOLHA com alternativas e preço.
   faixaDeLimiares() {
-    const { thresholds, costs } = this.avaliacao;
+    const { thresholds, costs, calibrationCustomers } = this.avaliacao;
+    const onde = calibrationCustomers
+      ? `${calibrationCustomers} clientes de calibração`
+      : 'a calibração';
 
     // Sem os controles de reprodução ao lado, os três cortes ficavam
     // espremidos na metade esquerda de uma barra vazia. Aqui eles são o
@@ -326,7 +329,10 @@ export class DataProcessingFlow extends HTMLElement {
       el('p', {
         class: 'training-note',
         text: `O limiar não é 0,5 herdado: com FN custando ${costs.falseNegative}× o FP, `
-          + 'o corte de menor custo desce e a rede passa a sinalizar mais.',
+          + 'o corte de menor custo desce e a rede passa a sinalizar mais. '
+          + `Os três custos acima foram medidos em ${onde} — nunca no teste, `
+          + 'porque escolher o corte onde ele é medido publica um número que '
+          + 'não se sustenta. A matriz ao lado é a do teste.',
       }),
     ]);
   }

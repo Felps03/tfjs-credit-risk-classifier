@@ -12,6 +12,7 @@ const {
   SYNTHETIC_FEATURE_NOISE,
   SYNTHETIC_LABEL_NOISE,
   DECISION_THRESHOLD,
+  CALIBRATION_SPLIT,
   L2_LAMBDA,
   DROPOUT_RATE,
   HIDDEN_UNITS,
@@ -111,12 +112,14 @@ const {
   resolveUnits,
   resolveArchitectureRun,
   resolveMitigation,
+  resolveBalance,
 } = require('./src/08a-cli');
 
 const {
   shuffle,
   splitCustomers,
   stratifiedSplitCustomers,
+  splitCalibration,
   stratifiedFolds,
   splitDataset,
 } = require('./src/09-split');
@@ -126,6 +129,7 @@ const {
   createRegularizer,
   buildModel,
   TRAINING,
+  balancedClassWeight,
   fitModel,
 } = require('./src/10-model');
 
@@ -237,10 +241,13 @@ if (require.main === module) {
     const regularization = resolveRegularization(argv);
     const units = resolveUnits(argv);
 
+    const balance = resolveBalance(argv);
+
     if (arquiteturas) {
       return reportArchitectures(sourceId, {
         ...regularization,
         ...arquiteturas,
+        balance,
         ...(folds === null ? {} : { folds }),
       });
     }
@@ -250,10 +257,12 @@ if (require.main === module) {
         ...regularization,
         ...(units === null ? {} : { units }),
         mitigate: resolveMitigation(argv),
+        balance,
       })
       : reportCrossValidation(sourceId, {
         ...regularization,
         ...(units === null ? {} : { units }),
+        balance,
         folds,
       });
   };
@@ -276,6 +285,7 @@ module.exports = {
   SYNTHETIC_LABEL_NOISE,
   SYNTHETIC_BOUNDS,
   DECISION_THRESHOLD,
+  CALIBRATION_SPLIT,
   L2_LAMBDA,
   DROPOUT_RATE,
   MODEL_DIR,
@@ -341,6 +351,7 @@ module.exports = {
   parseNumericFlag,
   resolveRegularization,
   resolveMitigation,
+  resolveBalance,
   resolveFolds,
   resolveUnits,
   resolveArchitectureRun,
@@ -348,6 +359,7 @@ module.exports = {
   shuffle,
   splitCustomers,
   stratifiedSplitCustomers,
+  splitCalibration,
   stratifiedFolds,
   majorityBaseline,
   readCustomersCsv,
@@ -376,6 +388,7 @@ module.exports = {
   formatThresholdComparison,
   evaluateModel,
   TRAINING,
+  balancedClassWeight,
   fitModel,
   CV_FOLDS,
   summarize,
