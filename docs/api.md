@@ -81,6 +81,8 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `L2_LAMBDA`, `DROPOUT_RATE` | constantes | Intensidade padrão dos dois freios contra overfitting |
 | `parseNumericFlag`, `resolveRegularization` | funções | Leitura validada de `--l2=` e `--dropout=`; devolve só o que foi pedido, para a fonte manter o resto |
 | `resolveMitigation` | função | Leitura de `--mitigar`: interruptor sem valor, e recusa `--mitigar=false` em vez de adivinhar |
+| `resolveUnits` | função | Leitura de `--units=64,32`; `--units=0` pede a regressão logística e vazio é erro |
+| `resolveArchitectureRun` | função | Leitura de `--arquiteturas` e `--repeticoes=k` |
 | `SHUFFLE_SEED`, `createRandom`, `shuffle` | constante / funções | Semente e embaralhamento reproduzível (*mulberry32*) |
 | `splitCustomers` | função | Divide clientes **brutos** em treino e teste, por fatiamento simples |
 | `stratifiedSplitCustomers` | função | O mesmo, preservando a proporção de classes — é o que `main` usa |
@@ -88,7 +90,8 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `majorityBaseline` | função | Piso da acurácia: sempre chutar a classe majoritária |
 | `compileModel` | função | Aplica optimizer, loss e métricas a um modelo |
 | `createRegularizer` | função | Devolve a penalidade L2 da camada, ou `null` quando `λ = 0` |
-| `buildModel` | função | Monta e compila a MLP com o número de entradas da fonte e os dois freios |
+| `HIDDEN_UNITS` | constante | A topologia padrão das camadas ocultas (`[16, 8]`) |
+| `buildModel` | função | Monta e compila a rede: entradas da fonte, camadas ocultas e os dois freios. Com `units: []` devolve uma **regressão logística** |
 | `saveModel` | função async | Salva o modelo em `file://<dir>` com o otimizador |
 | `loadModel` | função async | Carrega de `model.json` e garante que vem compilado |
 | `predictRisk` | função | Cliente bruto → probabilidade, já liberando os tensores |
@@ -112,6 +115,10 @@ Envolver em uma função `async` faz o erro **síncrono** de `resolveSourceId` v
 | `crossValidate` | função async | k dobras estratificadas → métricas por dobra, resumo, scores fora da amostra e auditoria dos 1.000 |
 | `formatCrossValidation` | função | Resultado → tabela com uma linha por dobra, média e erro padrão |
 | `reportCrossValidation` | função async | Caminho de execução de `--cv`: roda e imprime |
+| `ARCHITECTURES` | constante | As oito topologias comparadas, começando na regressão logística |
+| `compareArchitectures` | função async | Roda a validação cruzada de cada arquitetura e resume as métricas de todas as dobras |
+| `formatArchitectureComparison` | função | Comparação → tabela com parâmetros, épocas e métricas com erro padrão |
+| `reportArchitectures` | função async | Caminho de execução de `--arquiteturas`: roda e imprime |
 | `main` | função async | Pipeline completo para uma fonte: treina, avalia, salva, recarrega e prevê |
 
 ---

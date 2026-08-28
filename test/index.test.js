@@ -39,6 +39,12 @@ const {
   L2_LAMBDA,
   DROPOUT_RATE,
   createRegularizer,
+  HIDDEN_UNITS,
+  ARCHITECTURES,
+  compareArchitectures,
+  formatArchitectureComparison,
+  resolveUnits,
+  resolveArchitectureRun,
   parseNumericFlag,
   resolveRegularization,
   buildModel,
@@ -3234,6 +3240,281 @@ describe('crossValidate', () => {
     assert.ok(texto.includes('Média'));
     assert.ok(texto.includes('Erro'));
     assert.ok(texto.includes('AUC sobre o dataset inteiro'));
+  });
+});
+
+describe('buildModel — arquitetura', () => {
+  const camadas = (model) => model.layers.map((l) => l.getClassName());
+
+  it('dada a arquitetura padrão, quando montada, então é a do laboratório', () => {
+    // Given — `HIDDEN_UNITS` é o default, não um número solto no meio do código
+    const padrao = buildModel(57);
+    const explicito = buildModel(57, { units: HIDDEN_UNITS });
+
+    // Then
+    assert.deepStrictEqual(camadas(padrao), camadas(explicito));
+    assert.equal(padrao.countParams(), explicito.countParams());
+    assert.deepStrictEqual(HIDDEN_UNITS, [16, 8]);
+
+    padrao.dispose();
+    explicito.dispose();
+  });
+
+  it('dadas unidades diferentes, quando montadas, então a topologia acompanha', () => {
+    // Given / When / Then — uma densa por camada oculta, mais a saída,
+    // e um dropout depois de cada oculta
+    const casos = [
+      [[4], 3],
+      [[16, 8], 5],
+      [[16, 16, 16], 7],
+    ];
+
+    casos.forEach(([units, esperado]) => {
+      const model = buildModel(57, { units });
+
+      assert.equal(model.layers.length, esperado, JSON.stringify(units));
+      model.dispose();
+    });
+  });
+
+  it('dada a lista vazia, quando montada, então sobra uma REGRESSÃO LOGÍSTICA', () => {
+    // Given — sem camada oculta não há não-linearidade nenhuma no meio
+    const model = buildModel(57, { units: [] });
+
+    // Then — uma única densa, 57 pesos + 1 viés
+    assert.deepStrictEqual(camadas(model), ['Dense']);
+    assert.equal(model.countParams(), 58);
+    assert.equal(model.layers[0].activation.getClassName().toLowerCase(), 'sigmoid');
+
+    model.dispose();
+  });
+
+  it('dada a regressão logística, quando o dropout está ligado, então ela continua sem camadas', () => {
+    // Given — não há unidade oculta para desligar; o dropout não tem
+    // onde entrar, e a saída nunca o recebe
+    const model = buildModel(57, { units: [], dropout: 0.5 });
+
+    // Then
+    assert.equal(model.layers.length, 1);
+
+    model.dispose();
+  });
+
+  it('dada uma entrada de tamanho diferente, quando a rede não tem oculta, então a saída declara o formato', () => {
+    // Given — sem oculta, é a própria saída que precisa saber a entrada
+    const model = buildModel(4, { units: [] });
+
+    // Then
+    assert.deepStrictEqual(model.inputs[0].shape, [null, 4]);
+    assert.equal(model.countParams(), 5);
+
+    model.dispose();
+  });
+
+  it('dadas arquiteturas maiores, quando comparadas, então os parâmetros crescem', () => {
+    // Given / When
+    const contagens = [[], [4], [16, 8], [128, 64]].map((units) => {
+      const model = buildModel(57, { units });
+      const total = model.countParams();
+
+      model.dispose();
+
+      return total;
+    });
+
+    // Then
+    assert.deepStrictEqual(contagens, [58, 237, 1073, 15745]);
+  });
+});
+
+describe('resolveUnits', () => {
+  it('dado nenhum argumento, quando resolvido, então a fonte mantém a arquitetura padrão', () => {
+    // Given / When / Then — `null` é "não pedida", diferente de "nenhuma camada"
+    assert.equal(resolveUnits([]), null);
+    assert.equal(resolveUnits(['--source=german']), null);
+  });
+
+  it('dada uma lista, quando resolvida, então vira as camadas ocultas', () => {
+    // Given / When / Then
+    assert.deepStrictEqual(resolveUnits(['--units=64,32']), [64, 32]);
+    assert.deepStrictEqual(resolveUnits(['--units=8']), [8]);
+    assert.deepStrictEqual(resolveUnits(['--units=16,16,16']), [16, 16, 16]);
+  });
+
+  it('dado --units=0, quando resolvido, então pede a regressão logística', () => {
+    // Given — é a única grafia aceita para "nenhuma camada oculta"
+    assert.deepStrictEqual(resolveUnits(['--units=0']), []);
+  });
+
+  it('dado um valor vazio, quando resolvido, então recusa em vez de trocar a arquitetura em silêncio', () => {
+    // Given — a mesma lição de `--l2=`: argumento em branco não é intenção
+    assert.throws(() => resolveUnits(['--units=']), /Valor inválido para --units/);
+    assert.throws(() => resolveUnits(['--units=   ']), /Valor inválido para --units/);
+  });
+
+  it('dados valores impossíveis, quando resolvidos, então lançam', () => {
+    // Given — zero no meio da lista não é regressão logística, é erro
+    assert.throws(() => resolveUnits(['--units=abc']), /Valor inválido/);
+    assert.throws(() => resolveUnits(['--units=16,0']), /Valor inválido/);
+    assert.throws(() => resolveUnits(['--units=16.5']), /Valor inválido/);
+    assert.throws(() => resolveUnits(['--units=-8']), /Valor inválido/);
+    assert.throws(() => resolveUnits(['--units=2048']), /Valor inválido/);
+    assert.throws(() => resolveUnits(['--units=1,1,1,1,1,1,1,1,1']), /Valor inválido/);
+  });
+});
+
+describe('resolveArchitectureRun', () => {
+  it('dado nenhum argumento, quando resolvido, então a comparação não roda', () => {
+    // Given / When / Then
+    assert.equal(resolveArchitectureRun([]), null);
+    assert.equal(resolveArchitectureRun(['--cv']), null);
+  });
+
+  it('dado --arquiteturas, quando resolvido, então usa uma repetição', () => {
+    // Given / When / Then
+    assert.deepStrictEqual(resolveArchitectureRun(['--arquiteturas']), { repeats: 1 });
+  });
+
+  it('dado --repeticoes, quando resolvido, então usa o número pedido', () => {
+    // Given / When / Then
+    assert.deepStrictEqual(
+      resolveArchitectureRun(['--arquiteturas', '--repeticoes=5']),
+      { repeats: 5 },
+    );
+  });
+
+  it('dados valores impossíveis, quando resolvidos, então lançam', () => {
+    // Given / When / Then
+    assert.throws(() => resolveArchitectureRun(['--arquiteturas=5']), /sem valor/);
+    assert.throws(
+      () => resolveArchitectureRun(['--arquiteturas', '--repeticoes=0']),
+      /inteiro entre 1 e 20/,
+    );
+    assert.throws(
+      () => resolveArchitectureRun(['--arquiteturas', '--repeticoes=2.5']),
+      /inteiro entre 1 e 20/,
+    );
+  });
+});
+
+describe('ARCHITECTURES / compareArchitectures', () => {
+  const fonteEmMemoria = () => {
+    const customers = Array.from({ length: 60 }, (ignorado, index) => ({
+      a: index % 2,
+      b: (index % 5) / 5,
+      risk: index % 20 < 7 ? 1 : 0,
+    }));
+
+    return {
+      id: 'memoria',
+      label: 'Fonte de teste',
+      csvPath: '(memória)',
+      featureNames: ['a', 'b'],
+      regularization: { l2: 0, dropout: 0 },
+      ensure: () => ({ created: false }),
+      read: async () => customers,
+      fitScaler: () => null,
+      toVector: (customer) => [customer.a, customer.b],
+    };
+  };
+
+  it('dada a lista de arquiteturas, quando lida, então o piso é a regressão logística', () => {
+    // Given — comparar só redes entre si esconderia a pergunta que
+    // importa: as camadas ocultas pagam o próprio custo?
+    assert.deepStrictEqual(ARCHITECTURES[0].units, []);
+    assert.ok(ARCHITECTURES.some(({ units }) => units === HIDDEN_UNITS));
+  });
+
+  it('dadas as arquiteturas, quando conferidas, então nenhum rótulo se repete', () => {
+    // Given / When / Then — rótulo repetido tornaria a tabela ilegível
+    const rotulos = ARCHITECTURES.map(({ label }) => label);
+
+    assert.equal(new Set(rotulos).size, rotulos.length);
+  });
+
+  it('dadas duas arquiteturas, quando comparadas, então cada uma vira uma linha medida', async () => {
+    // Given
+    const architectures = [
+      { label: 'logística', units: [] },
+      { label: '4', units: [4] },
+    ];
+
+    // When
+    const { rows, baseline } = await compareArchitectures(fonteEmMemoria(), {
+      architectures, folds: 2,
+    });
+
+    // Then
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].parameters, 3);   // 2 features + viés
+    assert.ok(rows[1].parameters > rows[0].parameters);
+    rows.forEach((row) => {
+      ['accuracy', 'auc', 'cost', 'epochs'].forEach((metrica) => {
+        assert.ok(Number.isFinite(row[metrica].mean), `${row.label} ${metrica}`);
+        assert.ok(Number.isFinite(row[metrica].standardError), `${row.label} ${metrica}`);
+      });
+    });
+    assert.ok(Number.isFinite(baseline.mean));
+  });
+
+  it('dadas repetições, quando comparadas, então todas as dobras entram no mesmo resumo', async () => {
+    // Given — repetir com a MESMA semente mediria só os pesos iniciais
+    const architectures = [{ label: 'logística', units: [] }];
+
+    // When
+    const uma = await compareArchitectures(fonteEmMemoria(), {
+      architectures, folds: 2, repeats: 1,
+    });
+    const duas = await compareArchitectures(fonteEmMemoria(), {
+      architectures, folds: 2, repeats: 2,
+    });
+
+    // Then
+    assert.equal(uma.repeats, 1);
+    assert.equal(duas.repeats, 2);
+    assert.ok(duas.baseline.mean > 0);
+  });
+
+  it('dado o resultado, quando formatado, então a tabela traz parâmetros, baseline e protocolo', async () => {
+    // Given
+    const resultado = await compareArchitectures(fonteEmMemoria(), {
+      architectures: [{ label: 'logística', units: [] }], folds: 2,
+    });
+
+    // When
+    const texto = formatArchitectureComparison(resultado);
+
+    // Then
+    assert.ok(texto.includes('Arquitetura'));
+    assert.ok(texto.includes('Parâmetros'));
+    assert.ok(texto.includes('logística'));
+    assert.ok(texto.includes('Baseline da classe majoritária'));
+    assert.ok(texto.includes('2 dobras × 1'));
+  });
+
+  it('dado um orçamento de treino próprio, quando informado, então ele substitui o compartilhado', async () => {
+    // Given — comparar arquiteturas com orçamento fixo é justo com as
+    // redes e injusto com os modelos pequenos; este argumento é o que
+    // permite medir as duas coisas
+    const resultado = await crossValidate(fonteEmMemoria(), {
+      folds: 2, units: [], training: { epochs: 1 },
+    });
+
+    // Then
+    resultado.folds.forEach((dobra) => assert.equal(dobra.epochs, 1));
+  });
+
+  it('dada a validação cruzada, quando concluída, então informa parâmetros e épocas por dobra', async () => {
+    // Given — é o que a comparação de arquiteturas precisa saber
+    const resultado = await crossValidate(fonteEmMemoria(), { folds: 2, units: [4] });
+
+    // Then
+    assert.equal(resultado.parameters, 17);   // 2*4+4 ocultas + 4+1 saída
+    resultado.folds.forEach((dobra) => {
+      assert.ok(Number.isInteger(dobra.epochs) && dobra.epochs > 0);
+      assert.equal(dobra.parameters, 17);
+    });
+    assert.ok(Number.isFinite(resultado.summary.epochs.mean));
   });
 });
 

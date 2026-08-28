@@ -76,6 +76,10 @@ A suíte cobre o que é determinístico e verificável sem treinar a rede — ma
 | `toCsv` com schema     | Cabeçalho do German Credit e compatibilidade da chamada sem opções |
 | `buildModel`           | 3 densas + 2 de dropout, entrada `[null, 4]` ou `[null, 57]`, saída `[null, 1]`, **225** e **1.073 parâmetros**, ativações e loss |
 | `createRegularizer`    | Lambda chega intacto na camada e `λ = 0` devolve **`null`**, não uma penalidade inerte |
+| `buildModel` — arquitetura | `HIDDEN_UNITS` é o default de fato, topologia acompanhando a lista, contagens de parâmetro exatas (`58`, `237`, `1.073`, `15.745`) e **`units: []` virando uma regressão logística de uma camada só** |
+| `resolveUnits` | Lista lida, `--units=0` pedindo a regressão logística, e **vazio, `abc`, `16,0`, `16.5`, `-8`, `2048` e nove camadas lançando** |
+| `resolveArchitectureRun` | Ausência é `null`, `--arquiteturas` usa uma repetição, `--repeticoes=k` usa o pedido, e `--arquiteturas=5` ou `--repeticoes=0` lançam |
+| `ARCHITECTURES` / `compareArchitectures` | O piso da lista é a regressão logística, rótulos únicos, uma linha medida por arquitetura, parâmetros crescendo com a topologia e a validação cruzada informando parâmetros e épocas por dobra |
 | `buildModel` — regularização | L2 em **todas** as densas, dropout **só** depois das ocultas, `dropout: 0` restaura a topologia de 3 camadas e o total de parâmetros **não muda** |
 | `parseNumericFlag` / `resolveRegularization` | Padrões, leitura, limites inclusivos, valor negativo, dropout acima de `0.9` e **`--l2=` vazio que não vira zero em silêncio** |
 | Comportamento de L2 e dropout | Dropout **desligado na inferência** (duas predições idênticas com taxa `0.9`), `evaluate` **não** cobra a penalidade e o modelo regularizado sobrevive ao salvar/recarregar |

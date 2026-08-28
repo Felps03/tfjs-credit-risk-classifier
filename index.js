@@ -62,6 +62,18 @@ const DECISION_THRESHOLD = 0.5;
 const L2_LAMBDA = 0.003;
 const DROPOUT_RATE = 0.2;
 
+// A arquitetura padrão: duas camadas ocultas, afunilando.
+//
+// Ela ficou onde estava por uma razão medida, não por convenção. Oito
+// topologias foram comparadas por validação cruzada, da regressão
+// logística sem camada oculta nenhuma até uma rede de 15.745
+// parâmetros: entre as SETE redes, nenhuma se distingue de nenhuma. A
+// documentação traz a tabela.
+//
+// Trocar o padrão por outra dessas sete seria trocar por ruído — que é
+// exatamente o erro contra o qual o resto do projeto argumenta.
+const HIDDEN_UNITS = [16, 8];
+
 // Pasta onde o modelo treinado é persistido (ignorada pelo git).
 const MODEL_DIR = path.join(__dirname, 'model');
 
@@ -1023,6 +1035,65 @@ const resolveFolds = (argv = []) => {
   return folds;
 };
 
+// `--units=64,32` monta duas camadas ocultas; `--units=0` monta NENHUMA,
+// que é a regressão logística. O zero é a única forma aceita de pedir a
+// rede sem camada oculta — string vazia continua sendo erro, pela mesma
+// razão que em `--l2=`: um argumento em branco quase nunca é intenção, e
+// silenciosamente trocar a arquitetura seria o pior desfecho possível.
+const resolveUnits = (argv = []) => {
+  const prefix = '--units=';
+  const flag = argv.find((argument) => argument.startsWith(prefix));
+
+  if (!flag) {
+    return null;
+  }
+
+  const raw = flag.slice(prefix.length).trim();
+
+  if (raw === '0') {
+    return [];
+  }
+
+  const units = raw === '' ? [NaN] : raw.split(',').map((part) => Number(part.trim()));
+  const invalido = units.some((count) =>
+    !Number.isInteger(count) || count < 1 || count > 1024);
+
+  if (invalido || units.length > 8) {
+    throw new Error(
+      `Valor inválido para --units: ${raw}. Use até 8 inteiros entre 1 e 1024 `
+      + 'separados por vírgula, ou 0 para a regressão logística.',
+    );
+  }
+
+  return units;
+};
+
+// `--arquiteturas` liga a comparação; `--repeticoes=k` diz quantas vezes
+// a validação cruzada inteira se repete, com sementes diferentes.
+const resolveArchitectureRun = (argv = []) => {
+  const flag = argv.find((argument) => argument.startsWith('--arquiteturas'));
+
+  if (!flag) {
+    return null;
+  }
+
+  if (flag !== '--arquiteturas') {
+    throw new Error(
+      `Use --arquiteturas sem valor. Recebido: ${flag}.`,
+    );
+  }
+
+  const repeats = parseNumericFlag(argv, 'repeticoes', 1, 20);
+
+  if (!Number.isInteger(repeats) || repeats < 1) {
+    throw new Error(
+      `Valor inválido para --repeticoes: ${repeats}. Use um inteiro entre 1 e 20.`,
+    );
+  }
+
+  return { repeats };
+};
+
 // A mitigação é um interruptor, não um número: ou a decisão olha o grupo
 // ou não olha. Um valor depois do sinal de igual é recusado de propósito
 // — aceitar `--mitigar=false` daria a impressão de que existe um terceiro
@@ -1167,7 +1238,11 @@ const createRegularizer = (l2 = L2_LAMBDA) =>
 // entraram como argumento pelo mesmo motivo: para poderem ser desligados
 // e medidos, em vez de aceitos.
 const buildModel = (inputSize = 4, options = {}) => {
-  const { l2 = L2_LAMBDA, dropout = DROPOUT_RATE } = options;
+  const {
+    units = HIDDEN_UNITS,
+    l2 = L2_LAMBDA,
+    dropout = DROPOUT_RATE,
+  } = options;
   const model = tf.sequential();
 
   // Com `dropout: 0` a camada é OMITIDA, não adicionada com taxa zero.
@@ -1186,12 +1261,24 @@ const buildModel = (inputSize = 4, options = {}) => {
     }
   };
 
-  addHidden(16, { inputShape: [inputSize] });
-  addHidden(8);
+  // A primeira camada é a única que declara o formato da entrada; as
+  // demais o inferem da anterior.
+  units.forEach((count, index) => addHidden(
+    count,
+    index === 0 ? { inputShape: [inputSize] } : {},
+  ));
 
   // A saída não leva dropout. Descartar a única unidade que produz a
   // resposta não removeria um caminho redundante — apagaria a predição.
+  //
+  // Com `units: []` não há camada oculta nenhuma, e é a saída que passa a
+  // declarar a entrada. O que sobra é uma REGRESSÃO LOGÍSTICA: uma soma
+  // ponderada das features passando por uma sigmoide, sem não-linearidade
+  // no meio. É o piso de arquitetura, e existe para ser medido — se a
+  // rede não bater a linha reta, as camadas ocultas não estão pagando o
+  // próprio custo.
   model.add(tf.layers.dense({
+    ...(units.length === 0 ? { inputShape: [inputSize] } : {}),
     units: 1,
     activation: 'sigmoid',
     kernelRegularizer: createRegularizer(l2),
@@ -1657,9 +1744,16 @@ const crossValidate = async (source, options = {}) => {
   const {
     folds = CV_FOLDS,
     seed = SHUFFLE_SEED,
+    units = HIDDEN_UNITS,
     l2 = source.regularization.l2,
     dropout = source.regularization.dropout,
     verbose = 0,
+    // Sobrescreve a configuração de treino compartilhada. Existe por um
+    // motivo específico: comparar arquiteturas com um orçamento FIXO é
+    // justo com as redes e injusto com os modelos pequenos, que precisam
+    // de mais passos para sair do lugar. A documentação mede as duas
+    // coisas, e este argumento é o que torna a segunda reproduzível.
+    training = {},
     costs = {
       falsePositive: FALSE_POSITIVE_COST,
       falseNegative: FALSE_NEGATIVE_COST,
@@ -1695,10 +1789,10 @@ const crossValidate = async (source, options = {}) => {
     const xTest = tf.tensor2d(testCustomers.map(toVector));
     const yTest = tf.tensor2d(testCustomers.map(({ risk }) => [risk]));
 
-    const model = buildModel(source.featureNames.length, { l2, dropout });
+    const model = buildModel(source.featureNames.length, { units, l2, dropout });
 
     // eslint-disable-next-line no-await-in-loop
-    await fitModel(model, xTrain, yTrain, { verbose });
+    const history = await fitModel(model, xTrain, yTrain, { verbose, ...training });
 
     const { loss, accuracy } = evaluateModel(model, xTest, yTest);
     const roc = computeRocCurve(model, xTest, yTest);
@@ -1724,6 +1818,10 @@ const crossValidate = async (source, options = {}) => {
       fold,
       trainSize: trainCustomers.length,
       testSize: testCustomers.length,
+      parameters: model.countParams(),
+      // Quantas épocas o early stopping deixou correr. Arquiteturas
+      // maiores costumam parar antes: elas decoram mais rápido.
+      epochs: history.epoch.length,
       baseline: majorityBaseline(testCustomers.map(({ risk }) => [risk])),
       loss,
       accuracy,
@@ -1777,11 +1875,13 @@ const crossValidate = async (source, options = {}) => {
 
   return {
     folds: results,
+    parameters: results[0].parameters,
     summary: {
       baseline: summarize(results.map((result) => result.baseline)),
       accuracy: summarize(results.map((result) => result.accuracy)),
       auc: summarize(results.map((result) => result.auc)),
       cost: summarize(results.map((result) => result.cost)),
+      epochs: summarize(results.map((result) => result.epochs)),
     },
     outOfSample: { scores, threshold, auc: roc.auc },
     audit,
@@ -1833,6 +1933,106 @@ const formatCrossValidation = ({ folds, summary, outOfSample }) => [
   `AUC sobre o dataset inteiro (curva única, score fora da amostra): ${outOfSample.auc.toFixed(4)}`,
 ].join('\n');
 
+// --------------------------------------------------
+// 17.1 Comparar arquiteturas
+// --------------------------------------------------
+// "Qual arquitetura usar?" é a pergunta que mais se responde por hábito
+// em projetos de rede neural: duas camadas ocultas, umas dezenas de
+// unidades, afunilando. Aqui ela é respondida do mesmo jeito que as
+// outras — medindo, com a mesma validação cruzada que mede o resto.
+//
+// A lista começa DELIBERADAMENTE no piso. Uma regressão logística não é
+// rede neural nenhuma: é uma soma ponderada das features passando por
+// uma sigmoide. Se as camadas ocultas não baterem essa linha reta, elas
+// não estão pagando o próprio custo — e essa é uma resposta possível.
+const ARCHITECTURES = [
+  { label: 'regressão logística', units: [] },
+  { label: '4', units: [4] },
+  { label: '16', units: [16] },
+  { label: '16 → 8 (padrão)', units: HIDDEN_UNITS },
+  { label: '32 → 16', units: [32, 16] },
+  { label: '64 → 32', units: [64, 32] },
+  { label: '128 → 64', units: [128, 64] },
+  { label: '16 → 16 → 16', units: [16, 16, 16] },
+];
+
+// Cada arquitetura roda a validação cruzada inteira, e todas as dobras de
+// todas as repetições entram no mesmo resumo. Com `repeats > 1` a semente
+// do embaralhamento muda a cada repetição: repetir com a MESMA semente
+// mediria só a variação dos pesos iniciais, que já se sabe ser pequena
+// perto da variação do sorteio.
+const compareArchitectures = async (source, options = {}) => {
+  const {
+    architectures = ARCHITECTURES,
+    folds = CV_FOLDS,
+    repeats = 1,
+    seed = SHUFFLE_SEED,
+    l2,
+    dropout,
+    training = {},
+    verbose = 0,
+  } = options;
+
+  const rows = [];
+  const baselines = [];
+
+  for (const { label, units } of architectures) {
+    const measurements = { accuracy: [], auc: [], cost: [], epochs: [] };
+    let parameters = 0;
+
+    for (let repeat = 0; repeat < repeats; repeat += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await crossValidate(source, {
+        folds, units, l2, dropout, training, verbose, seed: seed + repeat,
+      });
+
+      parameters = result.parameters;
+      result.folds.forEach((entry) => {
+        measurements.accuracy.push(entry.accuracy);
+        measurements.auc.push(entry.auc);
+        measurements.cost.push(entry.cost);
+        measurements.epochs.push(entry.epochs);
+        baselines.push(entry.baseline);
+      });
+    }
+
+    rows.push({
+      label,
+      units,
+      parameters,
+      accuracy: summarize(measurements.accuracy),
+      auc: summarize(measurements.auc),
+      cost: summarize(measurements.cost),
+      epochs: summarize(measurements.epochs),
+    });
+  }
+
+  return { rows, baseline: summarize(baselines), folds, repeats };
+};
+
+const formatArchitectureComparison = ({ rows, baseline, folds, repeats }) => [
+  formatTable(
+    ['Arquitetura', 'Parâmetros', 'Épocas', 'Acurácia', 'AUC', 'Custo'],
+    rows.map((row) => [
+      row.label,
+      String(row.parameters),
+      row.epochs.mean.toFixed(1),
+      `${row.accuracy.mean.toFixed(4)} ± ${row.accuracy.standardError.toFixed(4)}`,
+      `${row.auc.mean.toFixed(4)} ± ${row.auc.standardError.toFixed(4)}`,
+      `${row.cost.mean.toFixed(1)} ± ${row.cost.standardError.toFixed(1)}`,
+    ]),
+  ),
+  '',
+  `Baseline da classe majoritária: ${baseline.mean.toFixed(4)}`,
+  `Protocolo: ${folds} dobras × ${repeats} repetição(ões) = `
+    + `${folds * repeats} medidas por arquitetura.`,
+  '',
+  // O leitor precisa saber a régua ANTES de comparar as linhas: com erros
+  // padrão desta ordem, diferenças na terceira casa não são diferenças.
+  'Duas arquiteturas só se distinguem se a distância entre elas superar a',
+  'soma dos erros padrão. Compare as colunas com isso em mente.',
+].join('\n');
+
 // Caminho de execução alternativo: em vez de UM hold-out com relatório
 // completo, k treinos com a estimativa e sua incerteza.
 const reportCrossValidation = async (sourceId = DEFAULT_SOURCE_ID, options = {}) => {
@@ -1873,12 +2073,32 @@ const reportCrossValidation = async (sourceId = DEFAULT_SOURCE_ID, options = {})
   return result;
 };
 
+const reportArchitectures = async (sourceId = DEFAULT_SOURCE_ID, options = {}) => {
+  const source = SOURCES[sourceId];
+  const { folds = CV_FOLDS, repeats = 1 } = options;
+
+  console.log('Fonte:', source.label);
+  console.log('Arquivo:', source.csvPath);
+  console.log('Entradas da rede:', source.featureNames.length);
+  console.log(
+    `Comparando ${ARCHITECTURES.length} arquiteturas por validação cruzada `
+    + `(${folds} dobras × ${repeats}); isso treina `
+    + `${ARCHITECTURES.length * folds * repeats} modelos.\n`,
+  );
+
+  const result = await compareArchitectures(source, options);
+
+  console.log(formatArchitectureComparison(result));
+
+  return result;
+};
+
 // --------------------------------------------------
 // 18. Treinar, avaliar, salvar, recarregar e prever
 // --------------------------------------------------
 const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const source = SOURCES[sourceId];
-  const { mitigate = false, ...regularization } = overrides;
+  const { mitigate = false, units = HIDDEN_UNITS, ...regularization } = overrides;
 
   // A fonte decide; a linha de comando tem a última palavra.
   const { l2, dropout } = { ...source.regularization, ...regularization };
@@ -1917,8 +2137,11 @@ const main = async (sourceId = DEFAULT_SOURCE_ID, overrides = {}) => {
   const xTest = tf.tensor2d(testCustomers.map(toVector));
   const yTest = tf.tensor2d(testLabels);
 
-  const model = buildModel(source.featureNames.length, { l2, dropout });
+  const model = buildModel(source.featureNames.length, { units, l2, dropout });
 
+  console.log('Arquitetura:', units.length === 0
+    ? 'regressão logística (sem camada oculta)'
+    : units.join(' → '));
   console.log(`Regularização: L2 = ${l2}, dropout = ${dropout}`);
   model.summary();
 
@@ -2113,12 +2336,30 @@ if (require.main === module) {
     // Tudo que pode lançar fica DENTRO da função async, para que um
     // argumento inválido vire rejeição e caia no mesmo `.catch`.
     const folds = resolveFolds(argv);
+    const arquiteturas = resolveArchitectureRun(argv);
     const sourceId = resolveSourceId(argv);
     const regularization = resolveRegularization(argv);
+    const units = resolveUnits(argv);
+
+    if (arquiteturas) {
+      return reportArchitectures(sourceId, {
+        ...regularization,
+        ...arquiteturas,
+        ...(folds === null ? {} : { folds }),
+      });
+    }
 
     return folds === null
-      ? main(sourceId, { ...regularization, mitigate: resolveMitigation(argv) })
-      : reportCrossValidation(sourceId, { ...regularization, folds });
+      ? main(sourceId, {
+        ...regularization,
+        ...(units === null ? {} : { units }),
+        mitigate: resolveMitigation(argv),
+      })
+      : reportCrossValidation(sourceId, {
+        ...regularization,
+        ...(units === null ? {} : { units }),
+        folds,
+      });
   };
 
   run().catch((error) => {
@@ -2204,6 +2445,8 @@ module.exports = {
   resolveRegularization,
   resolveMitigation,
   resolveFolds,
+  resolveUnits,
+  resolveArchitectureRun,
   createRandom,
   shuffle,
   splitCustomers,
@@ -2215,6 +2458,7 @@ module.exports = {
   splitDataset,
   compileModel,
   createRegularizer,
+  HIDDEN_UNITS,
   buildModel,
   saveModel,
   loadModel,
@@ -2241,5 +2485,9 @@ module.exports = {
   crossValidate,
   formatCrossValidation,
   reportCrossValidation,
+  ARCHITECTURES,
+  compareArchitectures,
+  formatArchitectureComparison,
+  reportArchitectures,
   main,
 };

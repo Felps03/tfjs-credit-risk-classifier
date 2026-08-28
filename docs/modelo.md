@@ -42,17 +42,23 @@ Total: **1.073 parâmetros treináveis** no dataset real com one-hot (**465** na
 
 > ⚠️ São 1.073 parâmetros para **640 linhas** de treino efetivo. Essa razão é desconfortável, e é o que motivou o item de [regularização](#-regularização-l2-e-dropout) — cuja medição, adiante, chega a uma conclusão menos confortável ainda.
 
-A largura da entrada é o **único** ponto da rede que depende do dataset:
+A largura da entrada é o **único** ponto da rede que depende do dataset; a topologia é um argumento como qualquer outro:
 
 ```javascript
+const HIDDEN_UNITS = [16, 8];
+
 const buildModel = (inputSize = 4, options = {}) => {
-  const { l2 = L2_LAMBDA, dropout = DROPOUT_RATE } = options;
+  const {
+    units = HIDDEN_UNITS,
+    l2 = L2_LAMBDA,
+    dropout = DROPOUT_RATE,
+  } = options;
   const model = tf.sequential();
 
-  const addHidden = (units, shape = {}) => {
+  const addHidden = (count, shape = {}) => {
     model.add(tf.layers.dense({
       ...shape,
-      units,
+      units: count,
       activation: 'relu',
       kernelRegularizer: createRegularizer(l2),
     }));
@@ -62,12 +68,19 @@ const buildModel = (inputSize = 4, options = {}) => {
     }
   };
 
-  addHidden(16, { inputShape: [inputSize] });
-  addHidden(8);
+  // A primeira camada é a única que declara o formato da entrada.
+  units.forEach((count, index) => addHidden(
+    count,
+    index === 0 ? { inputShape: [inputSize] } : {},
+  ));
 
   // A saída não leva dropout: descartar a única unidade que produz a
   // resposta não removeria um caminho redundante — apagaria a predição.
+  //
+  // Com `units: []` não há camada oculta nenhuma, e é a saída que passa
+  // a declarar a entrada. O que sobra é uma regressão logística.
   model.add(tf.layers.dense({
+    ...(units.length === 0 ? { inputShape: [inputSize] } : {}),
     units: 1,
     activation: 'sigmoid',
     kernelRegularizer: createRegularizer(l2),
@@ -81,14 +94,14 @@ const buildModel = (inputSize = 4, options = {}) => {
 | ------------- | ----------------------------------------------------------------------------------------- |
 | **ReLU**      | Introduz não-linearidade barata e evita o desaparecimento de gradiente das camadas ocultas |
 | **Sigmoid**   | Garante uma saída em `[0, 1]`, legível como probabilidade                                  |
-| **16 → 8**    | Funil: capacidade suficiente para o padrão, pequena o bastante para não decorar o dataset  |
+| **16 → 8**    | Funil, e a menor topologia que [empata com todas as outras](#-comparando-arquiteturas) em uma comparação de oito |
 | **L2 + dropout** | Os dois freios contra decorar, [medidos em uma grade de 30 combinações](#-regularização-l2-e-dropout) |
 
 ```javascript
-const model = buildModel(source.featureNames.length, { l2, dropout });   // 4, 19 ou 57
+const model = buildModel(source.featureNames.length, { units, l2, dropout });   // 4, 19 ou 57
 ```
 
-O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução.
+O `main()` chama `model.summary()` logo após construir o modelo, então a contagem de parâmetros por camada aparece no início de cada execução. E a topologia é escolhível pela linha de comando — `node index.js --units=64,32` —, o que existe para que a próxima pergunta possa ser respondida com medida em vez de convenção.
 
 ---
 

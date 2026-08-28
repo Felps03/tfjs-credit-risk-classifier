@@ -115,12 +115,22 @@ node index.js --cv=10    # escolhendo o k
 
 É [essa medição](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado) que responde "quanto o modelo acerta?" sem depender de qual sorteio calhou.
 
-Os dois freios contra *overfitting* são ajustáveis pela linha de comando, para que o efeito possa ser **visto** em vez de lido:
+Os dois freios contra *overfitting* são ajustáveis pela linha de comando, para que o efeito possa ser **visto** em vez de lido — e a arquitetura também:
 
 ```bash
 node index.js --l2=0 --dropout=0   # a rede sem regularização nenhuma
 node index.js --dropout=0.5        # só dropout, e forte
+node index.js --units=64,32        # outra topologia
+node index.js --units=0            # nenhuma camada oculta: regressão logística
 ```
+
+Escolher uma delas por convenção seria estranho num projeto que mede o resto, então há um comando que compara oito topologias por validação cruzada:
+
+```bash
+npm run arquiteturas               # da regressão logística à rede de 15.745 parâmetros
+```
+
+O [resultado](docs/modelo.md#-comparando-arquiteturas) é a parte interessante.
 
 E a disparidade medida pela auditoria pode ser **corrigida** em vez de só reportada, com um limiar por grupo calibrado no treino:
 
@@ -235,7 +245,7 @@ Duas limitações da versão anterior **deixaram de existir** com o dataset real
 - [x] ~~regularização L2 e dropout~~ — feito, veja [Regularização: L2 e dropout](docs/modelo.md#-regularização-l2-e-dropout);
 - [x] ~~mitigar a disparidade medida, não só reportá-la~~ — feito, veja [Mitigação da disparidade](docs/mitigacao.md#-mitigação-da-disparidade);
 - [x] ~~validação cruzada e split estratificado~~ — feito, veja [Validação cruzada e split estratificado](docs/validacao-cruzada.md#-validação-cruzada-e-split-estratificado);
-- [ ] comparar arquiteturas diferentes.
+- [x] ~~comparar arquiteturas diferentes~~ — feito, veja [Comparando arquiteturas](docs/modelo.md#-comparando-arquiteturas).
 
 **Produto**
 - [x] ~~testes automatizados~~ — feito, veja [Testes](#testes);

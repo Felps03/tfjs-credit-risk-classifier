@@ -10,6 +10,8 @@
     "start:synthetic": "node index.js --source=synthetic",
     "cv": "node index.js --cv",
     "cv:synthetic": "node index.js --source=synthetic --cv",
+    "arquiteturas": "node index.js --arquiteturas",
+    "arquiteturas:synthetic": "node index.js --source=synthetic --arquiteturas",
     "fetch:german": "node scripts/fetch-german.js",
     "seed": "node scripts/seed.js",
     "test": "node --test",
